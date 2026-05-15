@@ -1,0 +1,33 @@
+import type { PolicyConfig } from '../core/types.js';
+
+export const defaultPolicy: PolicyConfig = {
+  profile: 'default',
+  minimumReleaseAgeHours: 72,
+  blockLifecycleScripts: true,
+  warnLifecycleScripts: true,
+  blockGitDependencies: true,
+  warnGitDependencies: true,
+  requireProvenanceForHighImpactPackages: false,
+  warnMissingProvenanceWhenPreviouslyPresent: true,
+  warnMissingRegistrySignature: true,
+  blockNewPackageNamesInCI: true,
+  blockSuspiciousNameConfusion: true,
+  blockKnownMaliciousAdvisories: true,
+  warnUnknownPackages: true,
+  maxRiskScoreAllowed: 70,
+  maxRiskScoreWarn: 40,
+  allowOverridesWithJustification: true,
+  disallowOverridesInCI: true,
+  protectedPackageNames: [],
+  highImpactPackageNames: [],
+  requiredIntelligenceSources: [],
+  approvedRegistryHosts: ['registry.npmjs.org'],
+  requireTarballInspection: false,
+  requireIntegrityMatch: false,
+  inspectTransitiveDependencies: false,
+  maxDependencyClosurePackages: 250,
+  blockCredentialHarvestingPatterns: true,
+  blockInstallDownloaders: true,
+  requireWorkflowShaPinning: false,
+  forbidReleaseCaches: false
+};

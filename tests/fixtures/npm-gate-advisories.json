@@ -1,0 +1,11 @@
+{
+  "packages": [
+    {
+      "name": "advisory-malicious-package",
+      "versions": ["1.2.3"],
+      "type": "malicious",
+      "severity": "critical",
+      "summary": "Synthetic test fixture only"
+    }
+  ]
+}

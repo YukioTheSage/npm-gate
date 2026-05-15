@@ -1,0 +1,7 @@
+{
+  "name": "package-with-new-preinstall",
+  "version": "1.0.1",
+  "scripts": {
+    "preinstall": "node fixture.js"
+  }
+}

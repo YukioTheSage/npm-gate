@@ -1,0 +1,10 @@
+{
+  "name": "fixture-basic-project",
+  "private": true,
+  "dependencies": {
+    "clean-package": "1.0.0"
+  },
+  "devDependencies": {
+    "package-with-postinstall": "1.0.0"
+  }
+}

@@ -1,0 +1,4 @@
+node_modules/
+dist/
+coverage/
+npm_gate_instruction.md

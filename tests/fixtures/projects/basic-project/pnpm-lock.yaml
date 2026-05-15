@@ -1,0 +1,6 @@
+lockfileVersion: '9.0'
+packages:
+  clean-package@1.0.0:
+    resolution: { integrity: sha512-fixture }
+  package-with-postinstall@1.0.0:
+    resolution: { integrity: sha512-fixture }

@@ -1,0 +1,7 @@
+{
+  "name": "package-with-postinstall",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "node fixture.js"
+  }
+}

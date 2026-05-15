@@ -1,0 +1,61 @@
+{
+  "name": "npm-gate",
+  "version": "0.1.0",
+  "description": "Defensive npm supply-chain security wrapper, policy engine, and local scanner.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "npm-gate contributors",
+  "keywords": [
+    "npm",
+    "supply-chain",
+    "security",
+    "policy",
+    "cli",
+    "scanner"
+  ],
+  "engines": {
+    "node": ">=20.17.0"
+  },
+  "bin": {
+    "npm-gate": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
+    "dev": "tsx src/cli/index.ts",
+    "format": "prettier --write .",
+    "lint": "eslint .",
+    "smoke:pack": "node scripts/smoke-pack.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "fast-glob": "^3.3.2",
+    "npm-registry-fetch": "^19.1.1",
+    "picocolors": "^1.1.1",
+    "pino": "^9.5.0",
+    "semver": "^7.6.3",
+    "tar": "^7.4.3",
+    "yaml": "^2.9.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^22.8.7",
+    "@types/semver": "^7.5.8",
+    "eslint": "^9.13.0",
+    "prettier": "^3.3.3",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.12.2",
+    "vitest": "^2.1.5"
+  }
+}

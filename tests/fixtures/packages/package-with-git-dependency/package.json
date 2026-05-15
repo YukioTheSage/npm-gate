@@ -1,0 +1,7 @@
+{
+  "name": "package-with-git-dependency",
+  "version": "1.0.0",
+  "optionalDependencies": {
+    "fixture": "github:example/fixture#main"
+  }
+}

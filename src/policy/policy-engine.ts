@@ -31,7 +31,12 @@ function categoryForSignal(signal: RiskSignal): RiskCategory | undefined {
   if (signal.id.includes('credential')) return 'credential_exposure_risk';
   if (signal.id.includes('name-confusion') || signal.id.includes('typosquat'))
     return 'typosquat_risk';
-  if (signal.id.includes('frontend') || signal.id.includes('wallet'))
+  if (
+    signal.id.includes('frontend') ||
+    signal.id.includes('wallet') ||
+    signal.id.includes('cdn') ||
+    signal.id.includes('sri')
+  )
     return 'frontend_runtime_risk';
   if (signal.id.includes('emergency') || signal.id.includes('known-bad'))
     return 'emergency_denylist_risk';
@@ -67,6 +72,7 @@ function mustBlockSignal(
     'lifecycle-package-manager-recursion',
     'lifecycle-obfuscated-payload',
     'lifecycle-native-binary-execution',
+    'lifecycle-windows-native-loader',
     'lifecycle-bun-bootstrap'
   ]);
   if (policyMode === 'emergency' && signal.severity !== 'info') return true;
@@ -102,8 +108,14 @@ function mustBlockSignal(
     return true;
   if (
     (signal.id === 'git-dependency' || signal.id === 'git-dependency-switch') &&
-    mode === 'ci' &&
+    (mode === 'ci' || policyMode === 'strict' || policyMode === 'emergency') &&
     policy.blockGitDependencies
+  ) {
+    return true;
+  }
+  if (
+    signal.id === 'project-cdn-latest' &&
+    (mode === 'ci' || policyMode === 'strict' || policyMode === 'emergency')
   ) {
     return true;
   }
@@ -114,7 +126,8 @@ function mustBlockSignal(
     policy.blockCredentialHarvestingPatterns &&
     (mode === 'ci' || policy.profile === 'production') &&
     (signal.id === 'credential-harvesting-pattern' ||
-      signal.id === 'child-process-network-exfil')
+      signal.id === 'child-process-network-exfil' ||
+      signal.id === 'process-env-network-exfil')
   ) {
     return true;
   }
@@ -139,6 +152,8 @@ function requiresManualReview(signal: RiskSignal, policyMode: PolicyMode): boole
     'frontend-runtime-wallet-access',
     'frontend-runtime-clipboard-mutation',
     'frontend-runtime-transaction-mutation',
+    'project-cdn-latest',
+    'project-external-script-missing-sri',
     'medium-confidence-typosquat'
   ]).has(signal.id);
 }

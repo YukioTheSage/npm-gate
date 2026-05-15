@@ -95,6 +95,7 @@ export const policySchema = z
               repository: z.string().min(1),
               tagTemplate: z.string().min(1).optional(),
               commit: z.string().min(1).optional(),
+              packageJsonPath: z.string().min(1).optional(),
               required: z.boolean().optional()
             })
           )

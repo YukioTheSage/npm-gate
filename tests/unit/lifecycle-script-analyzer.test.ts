@@ -91,4 +91,14 @@ describe('lifecycle script analyzer', () => {
       expect(ids.some((id) => id.startsWith('lifecycle-') && id !== 'lifecycle-script')).toBe(true);
     }
   });
+
+  test('classifies Windows native loader execution as high risk', () => {
+    const ids = lifecycleSignals({
+      name: 'fixture',
+      version: '1.0.0',
+      scripts: { install: 'node drop.js && rundll32.exe node-gyp.dll,Start' }
+    }).map((signal) => signal.id);
+
+    expect(ids).toContain('lifecycle-windows-native-loader');
+  });
 });

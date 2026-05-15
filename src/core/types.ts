@@ -181,12 +181,14 @@ export interface SourceVerificationRule {
   repository: string;
   tagTemplate?: string;
   commit?: string;
+  packageJsonPath?: string;
   required?: boolean;
 }
 
 export interface SourceVerifier {
   resolveTagCommit(repository: string, tag: string): Promise<string | undefined>;
   hasCommit(repository: string, commit: string): Promise<boolean>;
+  fetchFile?(repository: string, ref: string, path: string): Promise<string | undefined>;
 }
 
 export interface LoadedConfig {

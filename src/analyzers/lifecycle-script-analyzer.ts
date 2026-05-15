@@ -78,6 +78,13 @@ const lifecycleRiskPatterns: Array<{
     score: 60
   },
   {
+    id: 'lifecycle-windows-native-loader',
+    label: 'Windows native loader execution',
+    pattern: /\b(?:rundll32(?:\.exe)?|regsvr32(?:\.exe)?)\b[\s\S]{0,180}\.(?:dll|ocx)\b/i,
+    severity: 'high',
+    score: 65
+  },
+  {
     id: 'lifecycle-obfuscated-payload',
     label: 'obfuscated execution payload',
     pattern: /\b(?:eval\s*\(|new\s+Function|Function\s*\(|atob\s*\(|Buffer\.from\s*\([\s\S]{0,160}base64)/i,

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { artifactDiffSignals } from '../../src/analyzers/artifact-diff-analyzer.js';
 
 describe('artifact diff analyzer', () => {
-  test('flags binary additions, source metadata changes, package size spikes, and tarball/source mismatch', () => {
+  test('flags binary additions, source metadata changes, package size and file-count spikes, and tarball/source mismatch', () => {
     const signals = artifactDiffSignals({
       previousManifest: {
         name: 'fixture',
@@ -18,10 +18,14 @@ describe('artifact diff analyzer', () => {
       previousEntries: [{ path: 'package/index.js', size: 100 }],
       currentEntries: [
         { path: 'package/index.js', size: 100 },
-        { path: 'package/native.node', size: 1000 }
+        { path: 'package/native.node', size: 1000 },
+        ...Array.from({ length: 22 }, (_, index) => ({
+          path: `package/generated/file-${index}.js`,
+          size: 100
+        }))
       ],
       previousSize: 1_000,
-      currentSize: 80_000,
+      currentSize: 151_000,
       sourceTagFound: false
     });
 
@@ -30,6 +34,7 @@ describe('artifact diff analyzer', () => {
         'new-binary-file',
         'source-repository-changed',
         'suspicious-package-size-increase',
+        'suspicious-package-file-count-increase',
         'tarball-source-mismatch'
       ])
     );

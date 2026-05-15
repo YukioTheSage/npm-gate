@@ -22,6 +22,7 @@
 - Credential harvesting and install-time downloader indicators in package tarballs.
 - Worm-like package propagation through install scripts and package-manager recursion.
 - Malicious frontend payloads targeting wallets, clipboard, transactions, DOM, fetch/XHR/WebSocket, or CDN `latest` consumption.
+- Application source references to CDN `latest` scripts or external scripts without Subresource Integrity.
 
 ## Threats Not Fully Addressed
 
@@ -33,6 +34,7 @@
 - Direct remote tarball contents from arbitrary hosts, which are blocked until remote-source trust policy is designed.
 - Sophisticated obfuscation beyond static heuristics.
 - Complete runtime detection of browser or application logic that does not match static indicators.
+- CDN content that changes after review when the application does not pin versions and SRI hashes.
 - Live incident feeds. Emergency denylist data must come from local policy config.
 
 ## Boundaries

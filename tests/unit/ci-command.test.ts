@@ -68,4 +68,29 @@ describe('ci command', () => {
     );
     expect(process.exitCode).toBe(0);
   });
+
+  test('release audit enables deep transitive tarball inspection', async () => {
+    mocks.scanProject.mockResolvedValue({
+      startedAt: '2026-05-14T00:00:00.000Z',
+      toolVersion: '0.1.0',
+      mode: 'ci',
+      policyMode: 'strict',
+      configSource: 'default',
+      findings: [],
+      summary: { allow: 0, warn: 0, block: 0, suppressed: 0 }
+    });
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    await makeProgram().parseAsync(['ci', '--release-audit', '--json'], { from: 'user' });
+
+    expect(mocks.scanProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        analyzeTarballs: true,
+        deepTarballInspection: true,
+        production: true,
+        policyMode: 'strict'
+      })
+    );
+    expect(process.exitCode).toBe(0);
+  });
 });

@@ -180,4 +180,54 @@ describe('policy engine', () => {
       expect(strict.decision, `${signalId} strict`).toBe('block');
     }
   });
+
+  test('strict and emergency policy block git dependencies outside CI mode', () => {
+    for (const policyMode of ['strict', 'emergency'] as const) {
+      for (const signalId of ['git-dependency', 'git-dependency-switch']) {
+        const finding = decidePackage({
+          candidate: { name: 'fixture', version: '1.0.0' },
+          policy: { ...defaultPolicy, policyMode },
+          mode: 'warn',
+          policyMode,
+          signals: [{ id: signalId, score: 35, severity: 'high', message: signalId }]
+        });
+
+        expect(finding.decision, `${policyMode} ${signalId}`).toBe('block');
+      }
+    }
+  });
+
+  test('project CDN latest blocks strict release gates while missing SRI requires review', () => {
+    const cdnLatest = decidePackage({
+      candidate: { name: 'project:runtime-sources' },
+      policy: { ...defaultPolicy, policyMode: 'strict' },
+      mode: 'warn',
+      policyMode: 'strict',
+      signals: [
+        {
+          id: 'project-cdn-latest',
+          score: 45,
+          severity: 'high',
+          message: 'Project source references a CDN latest URL'
+        }
+      ]
+    });
+    const missingSri = decidePackage({
+      candidate: { name: 'project:runtime-sources' },
+      policy: { ...defaultPolicy, policyMode: 'balanced' },
+      mode: 'warn',
+      policyMode: 'balanced',
+      signals: [
+        {
+          id: 'project-external-script-missing-sri',
+          score: 30,
+          severity: 'medium',
+          message: 'Project source references an external script without SRI'
+        }
+      ]
+    });
+
+    expect(cdnLatest.decision).toBe('block');
+    expect(missingSri.decision).toBe('manual_review');
+  });
 });

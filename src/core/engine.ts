@@ -52,6 +52,7 @@ import { analyzeGitHubWorkflows } from '../analyzers/workflow-analyzer.js';
 import { resolveDependencyClosure } from '../analyzers/dependency-closure-analyzer.js';
 import { analyzeCredentialExposure } from '../analyzers/credential-exposure-analyzer.js';
 import { emergencyDenylistSignals } from '../analyzers/emergency-analyzer.js';
+import { analyzeProjectRuntimeSources } from '../analyzers/project-source-analyzer.js';
 import {
   GitHubSourceVerifier,
   sourceVerificationSignals
@@ -210,6 +211,7 @@ async function configuredSourceVerificationSignals(
       ...(await sourceVerificationSignals({
         packageName,
         version,
+        currentManifest: manifest,
         rule,
         verifier: context.sourceVerifier
       }))
@@ -802,6 +804,14 @@ async function projectPolicySignals(
     findings.push({
       candidate: { name: 'lockfile:package-lock.json', source: 'package-lock.json' },
       signals: lockfileSignals
+    });
+  }
+
+  const runtimeSourceSignals = await analyzeProjectRuntimeSources(options.cwd);
+  if (runtimeSourceSignals.length > 0) {
+    findings.push({
+      candidate: { name: 'project:runtime-sources', source: 'project' },
+      signals: runtimeSourceSignals
     });
   }
 

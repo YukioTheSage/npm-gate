@@ -36,11 +36,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "commander": "^12.1.0",
+    "commander": "^14.0.3",
     "fast-glob": "^3.3.2",
     "npm-registry-fetch": "^19.1.1",
     "picocolors": "^1.1.1",
-    "pino": "^9.5.0",
+    "pino": "^10.3.1",
     "semver": "^7.6.3",
     "tar": "^7.4.3",
     "yaml": "^2.9.0",
@@ -48,9 +48,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
-    "@types/node": "^22.8.7",
+    "@types/node": "^25.8.0",
     "@types/semver": "^7.5.8",
-    "eslint": "^9.13.0",
+    "eslint": "^10.3.0",
     "prettier": "^3.3.3",
     "tsup": "^8.3.0",
     "tsx": "^4.19.2",

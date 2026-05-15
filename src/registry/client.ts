@@ -18,6 +18,7 @@ export class NpmRegistryClient implements RegistryClient {
   private readonly registryUrl: string;
   private readonly cacheDir: string;
   private readonly timeoutMs: number;
+  private readonly metadataRequests = new Map<string, Promise<PackageMetadata>>();
 
   constructor(private readonly options: NpmRegistryClientOptions) {
     this.registryUrl =
@@ -27,6 +28,20 @@ export class NpmRegistryClient implements RegistryClient {
   }
 
   async getPackageMetadata(name: string): Promise<PackageMetadata> {
+    const cachedRequest = this.metadataRequests.get(name);
+    if (cachedRequest) return cachedRequest;
+
+    const request = this.fetchPackageMetadata(name);
+    this.metadataRequests.set(name, request);
+    try {
+      return await request;
+    } catch (error) {
+      this.metadataRequests.delete(name);
+      throw error;
+    }
+  }
+
+  private async fetchPackageMetadata(name: string): Promise<PackageMetadata> {
     const cachePath = this.metadataCachePath(name);
     if (this.options.offline) {
       return JSON.parse(await readFile(cachePath, 'utf8')) as PackageMetadata;

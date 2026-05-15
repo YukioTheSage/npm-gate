@@ -13,6 +13,14 @@ function normalize(name: string): string {
     .toLowerCase();
 }
 
+function tokens(name: string): string[] {
+  return name
+    .replace(/^@/, '')
+    .split(/[/_.-]+/)
+    .map((token) => token.toLowerCase())
+    .filter(Boolean);
+}
+
 function scopeAlias(name: string): string | undefined {
   const match = name.match(/^@([^/]+)\/(.+)$/);
   return match ? `${match[1]}-${match[2]}` : undefined;
@@ -45,6 +53,10 @@ export function detectNameConfusion(
     const alias = scopeAlias(protectedName);
     const aliasNormalized = alias ? normalize(alias) : undefined;
     const distance = levenshtein(normalizedCandidate, normalizedProtected);
+    const candidateTokens = tokens(packageName);
+    const protectedTokens = tokens(protectedName);
+    const sortedCandidate = [...candidateTokens].sort().join('-');
+    const sortedProtected = [...protectedTokens].sort().join('-');
 
     if (normalizedCandidate === normalizedProtected || normalizedCandidate === aliasNormalized) {
       return {
@@ -61,6 +73,45 @@ export function detectNameConfusion(
         confidence: distance <= 1 ? 'high' : 'medium',
         distance,
         explanation: `${packageName} is similar to protected package ${protectedName} with edit distance ${distance}`
+      };
+    }
+
+    if (
+      protectedTokens.length > 1 &&
+      candidateTokens.length === protectedTokens.length &&
+      sortedCandidate === sortedProtected
+    ) {
+      return {
+        protectedName,
+        confidence: 'medium',
+        distance,
+        explanation: `${packageName} reorders tokens from protected package ${protectedName}`
+      };
+    }
+
+    if (
+      normalizedProtected.length >= 5 &&
+      normalizedCandidate.startsWith(normalizedProtected) &&
+      normalizedCandidate.length > normalizedProtected.length
+    ) {
+      return {
+        protectedName,
+        confidence: 'medium',
+        distance,
+        explanation: `${packageName} adds a suffix to protected package ${protectedName}`
+      };
+    }
+
+    if (
+      normalizedProtected.length >= 5 &&
+      normalizedCandidate.endsWith(normalizedProtected) &&
+      normalizedCandidate.length > normalizedProtected.length
+    ) {
+      return {
+        protectedName,
+        confidence: 'medium',
+        distance,
+        explanation: `${packageName} adds a prefix to protected package ${protectedName}`
       };
     }
   }

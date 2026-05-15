@@ -3,11 +3,13 @@ import { defaultPolicy } from './default-policy.js';
 
 export const runtimeModeSchema = z.enum(['off', 'warn', 'block', 'ci']);
 export const policyProfileSchema = z.enum(['default', 'production', 'audit-only']);
+export const policyModeSchema = z.enum(['balanced', 'strict', 'emergency']);
 export const intelligenceSourceSchema = z.enum(['npm-audit', 'osv', 'local']);
 
 export const policySchema = z
   .object({
     profile: policyProfileSchema.default(defaultPolicy.profile),
+    policyMode: policyModeSchema.default(defaultPolicy.policyMode),
     minimumReleaseAgeHours: z
       .number()
       .int()
@@ -62,7 +64,43 @@ export const policySchema = z
       .default(defaultPolicy.blockCredentialHarvestingPatterns),
     blockInstallDownloaders: z.boolean().default(defaultPolicy.blockInstallDownloaders),
     requireWorkflowShaPinning: z.boolean().default(defaultPolicy.requireWorkflowShaPinning),
-    forbidReleaseCaches: z.boolean().default(defaultPolicy.forbidReleaseCaches)
+    forbidReleaseCaches: z.boolean().default(defaultPolicy.forbidReleaseCaches),
+    emergencyDenylist: z
+      .array(
+        z.object({
+          package: z.string().min(1),
+          versions: z.array(z.string().min(1)).default([]),
+          reason: z.string().min(1)
+        })
+      )
+      .default(defaultPolicy.emergencyDenylist),
+    expectedProvenance: z
+      .array(
+        z.object({
+          package: z.string().min(1),
+          repository: z.string().min(1).optional(),
+          workflow: z.string().min(1).optional(),
+          ref: z.string().min(1).optional(),
+          commitSubject: z.string().min(1).optional()
+        })
+      )
+      .default(defaultPolicy.expectedProvenance),
+    sourceVerification: z
+      .object({
+        enabled: z.boolean().default(defaultPolicy.sourceVerification.enabled),
+        rules: z
+          .array(
+            z.object({
+              package: z.string().min(1),
+              repository: z.string().min(1),
+              tagTemplate: z.string().min(1).optional(),
+              commit: z.string().min(1).optional(),
+              required: z.boolean().optional()
+            })
+          )
+          .default(defaultPolicy.sourceVerification.rules)
+      })
+      .default(defaultPolicy.sourceVerification)
   })
   .strict();
 

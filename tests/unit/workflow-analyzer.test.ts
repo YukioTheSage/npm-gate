@@ -76,4 +76,45 @@ describe('GitHub workflow analyzer', () => {
 
     expect(signals).toEqual([]);
   });
+
+  test('flags workflow_run artifacts, OIDC plus cache restore, self-hosted PR runners, and publish after risky install', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'npm-gate-workflow-release-risk-'));
+    const workflows = join(cwd, '.github', 'workflows');
+    await mkdir(workflows, { recursive: true });
+    await writeFile(
+      join(workflows, 'release.yml'),
+      [
+        'name: release',
+        'on: workflow_run',
+        'permissions:',
+        '  contents: write',
+        '  id-token: write',
+        'jobs:',
+        '  publish:',
+        '    runs-on: self-hosted',
+        '    steps:',
+        '      - uses: actions/download-artifact@v4',
+        '      - uses: actions/cache@v4',
+        '        with:',
+        '          path: ~/.npm',
+        '          key: npm-shared',
+        '      - run: npm install',
+        '      - run: npm publish --provenance'
+      ].join('\n')
+    );
+
+    const signals = await analyzeGitHubWorkflows(cwd, {
+      requireWorkflowShaPinning: true,
+      forbidReleaseCaches: true
+    });
+
+    expect(signals.map((signal) => signal.id)).toEqual(
+      expect.arrayContaining([
+        'workflow-run-artifact-trust-boundary',
+        'workflow-oidc-cache-boundary',
+        'workflow-self-hosted-untrusted-runner',
+        'workflow-publish-after-risky-install'
+      ])
+    );
+  });
 });

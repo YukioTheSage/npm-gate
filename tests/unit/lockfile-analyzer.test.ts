@@ -44,7 +44,7 @@ describe('lockfile analyzer', () => {
       JSON.stringify({
         lockfileVersion: 3,
         packages: {
-          '': {},
+          '': { name: 'root-app', version: '0.0.0' },
           'node_modules/foo': { version: '1.0.0' },
           'node_modules/foo/node_modules/bar': { version: '2.0.0' },
           'node_modules/@scope/pkg': { version: '3.0.0' }
@@ -54,10 +54,18 @@ describe('lockfile analyzer', () => {
 
     const candidates = await scanPackageLock(cwd);
 
-    expect(candidates.map(({ name, version }) => ({ name, version }))).toEqual([
-      { name: 'foo', version: '1.0.0' },
-      { name: 'bar', version: '2.0.0' },
-      { name: '@scope/pkg', version: '3.0.0' }
+    expect(candidates.map(({ name, version, dependencyPath }) => ({ name, version, dependencyPath }))).toEqual([
+      { name: 'foo', version: '1.0.0', dependencyPath: ['root-app@0.0.0', 'foo@1.0.0'] },
+      {
+        name: 'bar',
+        version: '2.0.0',
+        dependencyPath: ['root-app@0.0.0', 'foo@1.0.0', 'bar@2.0.0']
+      },
+      {
+        name: '@scope/pkg',
+        version: '3.0.0',
+        dependencyPath: ['root-app@0.0.0', '@scope/pkg@3.0.0']
+      }
     ]);
   });
 

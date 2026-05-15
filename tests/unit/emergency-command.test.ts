@@ -14,58 +14,44 @@ vi.mock('../../src/reporting/console-reporter.js', () => ({
   renderConsoleReport: mocks.renderConsoleReport
 }));
 
-const { registerCiCommand } = await import('../../src/cli/commands/ci.js');
+const { registerEmergencyCommand } = await import('../../src/cli/commands/emergency.js');
 
 function makeProgram(): Command {
   const program = new Command();
   program.exitOverride();
-  registerCiCommand(program);
+  registerEmergencyCommand(program);
   return program;
 }
 
-describe('ci command', () => {
+describe('emergency command', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     mocks.scanProject.mockReset();
     mocks.renderConsoleReport.mockClear();
     process.exitCode = undefined;
-    delete process.env.NPM_GATE_MODE;
   });
 
-  test('runs production-grade scan without delegating to npm ci', async () => {
+  test('runs an emergency-mode scan with strict failure behavior', async () => {
     mocks.scanProject.mockResolvedValue({
       startedAt: '2026-05-14T00:00:00.000Z',
       toolVersion: '0.1.0',
-      mode: 'ci',
+      mode: 'warn',
+      policyMode: 'emergency',
       configSource: 'default',
-      findings: [
-        {
-          id: 'clean:fixture@1.0.0',
-          package: 'fixture',
-          version: '1.0.0',
-          decision: 'allow',
-          severity: 'info',
-          score: 0,
-          reasons: ['No policy issues detected'],
-          evidence: [],
-          remediation: [],
-          canOverride: false
-        }
-      ],
-      summary: { allow: 1, warn: 0, block: 0, suppressed: 0 }
+      findings: [],
+      summary: { allow: 0, warn: 0, block: 0, suppressed: 0 }
     });
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
-    await makeProgram().parseAsync(['ci', '--json'], { from: 'user' });
+    await makeProgram().parseAsync(['emergency', '--json'], { from: 'user' });
 
     expect(mocks.scanProject).toHaveBeenCalledWith(
       expect.objectContaining({
-        env: expect.objectContaining({ NPM_GATE_MODE: 'ci' }),
         strict: true,
-        production: true,
-        policyMode: 'strict'
+        policyMode: 'emergency',
+        analyzeTarballs: true
       })
     );
-    expect(process.exitCode).toBe(0);
+    expect(process.stdout.write).toHaveBeenCalledWith(expect.stringContaining('"policyMode": "emergency"'));
   });
 });

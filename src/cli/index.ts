@@ -4,6 +4,7 @@ import { registerAllowCommand } from './commands/allow.js';
 import { registerAuditCommand } from './commands/audit.js';
 import { registerCiCommand } from './commands/ci.js';
 import { registerDoctorCommand } from './commands/doctor.js';
+import { registerEmergencyCommand } from './commands/emergency.js';
 import { registerExplainCommand } from './commands/explain.js';
 import { registerInstallCommands } from './commands/install.js';
 import { registerConfigCommand, registerPolicyCommand } from './commands/policy.js';
@@ -25,6 +26,7 @@ registerConfigCommand(program);
 registerAuditCommand(program);
 registerDoctorCommand(program);
 registerExplainCommand(program);
+registerEmergencyCommand(program);
 
 program.exitOverride();
 

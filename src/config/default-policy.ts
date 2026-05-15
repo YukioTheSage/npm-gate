@@ -2,6 +2,7 @@ import type { PolicyConfig } from '../core/types.js';
 
 export const defaultPolicy: PolicyConfig = {
   profile: 'default',
+  policyMode: 'balanced',
   minimumReleaseAgeHours: 72,
   blockLifecycleScripts: true,
   warnLifecycleScripts: true,
@@ -29,5 +30,11 @@ export const defaultPolicy: PolicyConfig = {
   blockCredentialHarvestingPatterns: true,
   blockInstallDownloaders: true,
   requireWorkflowShaPinning: false,
-  forbidReleaseCaches: false
+  forbidReleaseCaches: false,
+  emergencyDenylist: [],
+  expectedProvenance: [],
+  sourceVerification: {
+    enabled: false,
+    rules: []
+  }
 };

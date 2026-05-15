@@ -10,7 +10,8 @@ import type {
   RegistryClient,
   RiskSignal,
   ScanProjectOptions,
-  ScanReport
+  ScanReport,
+  SourceVerifier
 } from './types.js';
 import { loadConfig } from '../config/config-loader.js';
 import { NpmRegistryClient } from '../registry/client.js';
@@ -23,6 +24,7 @@ import { releaseAgeSignal } from '../analyzers/release-age-analyzer.js';
 import { lifecycleSignals } from '../analyzers/lifecycle-script-analyzer.js';
 import { manifestBehaviorSignals } from '../analyzers/behavior-rules.js';
 import { dependencyDiffSignals } from '../analyzers/dependency-diff-analyzer.js';
+import { artifactDiffSignals } from '../analyzers/artifact-diff-analyzer.js';
 import { detectNameConfusion } from '../analyzers/name-confusion-analyzer.js';
 import {
   collectManifestDependencies,
@@ -35,7 +37,10 @@ import {
   loadLocalAdvisoryFeed,
   matchLocalAdvisories
 } from '../analyzers/advisory-analyzer.js';
-import { provenanceSignal } from '../analyzers/provenance-analyzer.js';
+import {
+  expectedProvenanceSignals,
+  provenanceSignal
+} from '../analyzers/provenance-analyzer.js';
 import { signatureSignal } from '../analyzers/signature-analyzer.js';
 import { analyzeLocalSourceCandidate } from '../analyzers/local-source-analyzer.js';
 import {
@@ -45,15 +50,27 @@ import {
 import { analyzeLockfileSecurity } from '../analyzers/lockfile-security-analyzer.js';
 import { analyzeGitHubWorkflows } from '../analyzers/workflow-analyzer.js';
 import { resolveDependencyClosure } from '../analyzers/dependency-closure-analyzer.js';
+import { analyzeCredentialExposure } from '../analyzers/credential-exposure-analyzer.js';
+import { emergencyDenylistSignals } from '../analyzers/emergency-analyzer.js';
+import {
+  GitHubSourceVerifier,
+  sourceVerificationSignals
+} from '../analyzers/source-verification-analyzer.js';
 import { OsvIntelligenceClient } from '../intelligence/osv-client.js';
 import { decidePackage } from '../policy/policy-engine.js';
 import { loadAllowlist } from '../policy/allowlist.js';
+import {
+  applyScriptAllowlist,
+  loadScriptAllowlist,
+  type ScriptAllowlist
+} from '../policy/script-allowlist.js';
 import { applyExceptions, loadExceptions } from '../policy/exceptions.js';
 import { createJsonReport } from '../reporting/json-reporter.js';
 import { pathExists } from '../utils/fs.js';
 import { parsePackageRef } from '../utils/package-ref.js';
 
 const TOOL_VERSION = '0.1.0';
+const DEFAULT_CANDIDATE_CONCURRENCY = 8;
 
 interface EvaluationContext {
   loaded: LoadedConfig;
@@ -61,11 +78,15 @@ interface EvaluationContext {
   tarballCache: Map<string, Promise<RegistryPackageTarballInspection | undefined>>;
   intelligenceFailures: Map<IntelligenceSource, RiskSignal>;
   transitiveEvaluated: Set<string>;
+  scriptAllowlist: ScriptAllowlist;
+  sourceVerifier: SourceVerifier;
 }
 
 interface EvaluatedPackage {
   candidate: PackageCandidate;
   signals: RiskSignal[];
+  integrity?: string;
+  tarballSha256?: string;
 }
 
 async function readLocalAdvisories(cwd: string) {
@@ -82,27 +103,54 @@ function configProfile(options: ScanProjectOptions) {
   return options.production ? 'production' : undefined;
 }
 
+async function mapWithConcurrency<T, U>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T, index: number) => Promise<U>
+): Promise<U[]> {
+  const results = new Array<U>(values.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), values.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= values.length) return;
+        results[index] = await mapper(values[index]!, index);
+      }
+    })
+  );
+
+  return results;
+}
+
 async function projectCandidates(cwd: string): Promise<PackageCandidate[]> {
   const manifestPath = join(cwd, 'package.json');
   const dependencyFiles = new Set(await discoverDependencyFiles(cwd));
   const candidates: PackageCandidate[] = [];
+  const manifestPackageNames = new Set<string>();
   if (dependencyFiles.has('package.json') && (await pathExists(manifestPath))) {
     const manifest = await readPackageManifest(manifestPath);
-    candidates.push(
-      ...collectManifestDependencies(manifest).map((dependency) => {
-        const parsed = parsePackageRef(dependency.spec);
-        return {
-          name: dependency.name,
-          requested: dependency.spec,
-          spec: parsed.type === 'registry' ? dependency.spec : parsed.spec,
-          dependencyType: dependency.section,
-          source: 'package.json',
-          sourceType: parsed.sourceType
-        };
-      })
-    );
+    const manifestCandidates = collectManifestDependencies(manifest).map((dependency) => {
+      const parsed = parsePackageRef(dependency.spec);
+      return {
+        name: dependency.name,
+        requested: dependency.spec,
+        spec: parsed.type === 'registry' ? dependency.spec : parsed.spec,
+        dependencyType: dependency.section,
+        source: 'package.json',
+        sourceType: parsed.sourceType
+      };
+    });
+    manifestCandidates.forEach((candidate) => manifestPackageNames.add(candidate.name));
+    candidates.push(...manifestCandidates);
   }
-  candidates.push(...(await scanLockfiles(cwd)));
+  for (const candidate of await scanLockfiles(cwd)) {
+    if (manifestPackageNames.size > 0 && !manifestPackageNames.has(candidate.name)) continue;
+    candidates.push(candidate);
+  }
 
   const byName = new Map<string, PackageCandidate>();
   for (const candidate of candidates) {
@@ -145,6 +193,31 @@ function gitDependencySignal(candidate: PackageCandidate): RiskSignal | undefine
   };
 }
 
+async function configuredSourceVerificationSignals(
+  manifest: PackageManifest,
+  context: EvaluationContext
+): Promise<RiskSignal[]> {
+  if (!context.loaded.policy.sourceVerification.enabled) return [];
+  const packageName = manifest.name;
+  const version = manifest.version;
+  if (!packageName || !version) return [];
+  const rules = context.loaded.policy.sourceVerification.rules.filter(
+    (rule) => rule.package === packageName
+  );
+  const signals: RiskSignal[] = [];
+  for (const rule of rules) {
+    signals.push(
+      ...(await sourceVerificationSignals({
+        packageName,
+        version,
+        rule,
+        verifier: context.sourceVerifier
+      }))
+    );
+  }
+  return signals;
+}
+
 async function evaluateCandidate(
   candidate: PackageCandidate,
   registry: RegistryClient,
@@ -174,6 +247,11 @@ async function evaluateCandidate(
     const versionCount = Object.keys(metadata.versions).length;
 
     candidate.version = version;
+    signals.push(
+      ...emergencyDenylistSignals(candidate, loaded.policy.emergencyDenylist, [
+        `${candidate.name}@${version}`
+      ])
+    );
     signals.push(...lifecycleSignals(current, previousManifest));
     signals.push(...manifestBehaviorSignals(current));
     signals.push(...dependencyDiffSignals(previousManifest, current));
@@ -204,6 +282,13 @@ async function evaluateCandidate(
       loaded.policy.highImpactPackageNames.includes(candidate.name);
     const provenance = provenanceSignal(current, candidate.name, requiresProvenance);
     if (provenance) signals.push(provenance);
+    const expectedProvenance = loaded.policy.expectedProvenance.find(
+      (rule) => rule.package === candidate.name
+    );
+    if (expectedProvenance) {
+      signals.push(...expectedProvenanceSignals(current, expectedProvenance));
+    }
+    signals.push(...(await configuredSourceVerificationSignals(current, context)));
     const signature = signatureSignal(
       current,
       loaded.policy.warnMissingRegistrySignature,
@@ -211,17 +296,40 @@ async function evaluateCandidate(
     );
     if (signature) signals.push(signature);
 
+    let currentInspection: RegistryPackageTarballInspection | undefined;
+    let previousInspection: RegistryPackageTarballInspection | undefined;
+    let previousTarballUnavailable: string | undefined;
     if (options.analyzeTarballs || loaded.policy.requireTarballInspection) {
-      signals.push(
-        ...(await registryTarballSignals({
-          registry,
-          cache: context.tarballCache,
-          manifest: current,
-          requireTarballInspection: loaded.policy.requireTarballInspection,
-          requireIntegrityMatch: loaded.policy.requireIntegrityMatch
-        }))
-      );
+      const currentTarball = await registryTarballInspection({
+        registry,
+        cache: context.tarballCache,
+        manifest: current,
+        requireTarballInspection: loaded.policy.requireTarballInspection,
+        requireIntegrityMatch: loaded.policy.requireIntegrityMatch
+      });
+      currentInspection = currentTarball.inspection;
+      signals.push(...currentTarball.signals);
+
+      const previousTarball = await previousRegistryTarballInspection({
+        registry,
+        cache: context.tarballCache,
+        manifest: previousManifest,
+        requireIntegrityMatch: loaded.policy.requireIntegrityMatch
+      });
+      previousInspection = previousTarball.inspection;
+      previousTarballUnavailable = previousTarball.unavailable;
     }
+    signals.push(
+      ...artifactDiffSignals({
+        previousManifest,
+        currentManifest: current,
+        previousEntries: previousInspection?.entries,
+        currentEntries: currentInspection?.entries,
+        previousSize: inspectedPackageSize(previousInspection),
+        currentSize: inspectedPackageSize(currentInspection),
+        previousTarballUnavailable
+      })
+    );
 
     if (versionCount <= 1) {
       signals.push({
@@ -253,7 +361,9 @@ async function evaluateCandidate(
       });
     }
 
-    const evaluated: EvaluatedPackage[] = [{ candidate, signals }];
+    const evaluated: EvaluatedPackage[] = [
+      { candidate, signals, integrity: current.dist?.integrity }
+    ];
     if (loaded.policy.inspectTransitiveDependencies) {
       try {
         evaluated.push(
@@ -296,11 +406,16 @@ function evidenceValueWithDependencyPath(value: unknown, dependencyPath: string[
 function withDependencyPath(signals: RiskSignal[], dependencyPath: string[]): RiskSignal[] {
   return signals.map((signal) => ({
     ...signal,
+    dependencyPath: signal.dependencyPath ?? dependencyPath,
     evidence: (signal.evidence ?? []).map((evidence) => ({
       ...evidence,
       value: evidenceValueWithDependencyPath(evidence.value, dependencyPath)
     }))
   }));
+}
+
+function withCandidateDependencyPath(candidate: PackageCandidate, signals: RiskSignal[]): RiskSignal[] {
+  return candidate.dependencyPath?.length ? withDependencyPath(signals, candidate.dependencyPath) : signals;
 }
 
 function dependencyClosureUninspectable(
@@ -352,6 +467,18 @@ async function evaluateTransitiveDependencies(
       ...manifestBehaviorSignals(dependency.manifest),
       ...dependencyDiffSignals(previousManifest, dependency.manifest)
     ];
+    signals.push(
+      ...emergencyDenylistSignals(
+        {
+          name: dependency.name,
+          version: dependency.version,
+          source: 'transitive',
+          sourceType: 'registry'
+        },
+        loaded.policy.emergencyDenylist,
+        dependency.dependencyPath
+      )
+    );
 
     const releaseSignal = releaseAgeSignal(
       getPublishTime(dependency.metadata, dependency.version),
@@ -387,6 +514,13 @@ async function evaluateTransitiveDependencies(
       loaded.policy.highImpactPackageNames.includes(dependency.name);
     const provenance = provenanceSignal(dependency.manifest, dependency.name, requiresProvenance);
     if (provenance) signals.push(provenance);
+    const expectedProvenance = loaded.policy.expectedProvenance.find(
+      (rule) => rule.package === dependency.name
+    );
+    if (expectedProvenance) {
+      signals.push(...expectedProvenanceSignals(dependency.manifest, expectedProvenance));
+    }
+    signals.push(...(await configuredSourceVerificationSignals(dependency.manifest, context)));
     const signature = signatureSignal(
       dependency.manifest,
       loaded.policy.warnMissingRegistrySignature,
@@ -394,17 +528,43 @@ async function evaluateTransitiveDependencies(
     );
     if (signature) signals.push(signature);
 
-    if (options.analyzeTarballs || loaded.policy.requireTarballInspection) {
-      signals.push(
-        ...(await registryTarballSignals({
-          registry,
-          cache: context.tarballCache,
-          manifest: dependency.manifest,
-          requireTarballInspection: loaded.policy.requireTarballInspection,
-          requireIntegrityMatch: loaded.policy.requireIntegrityMatch
-        }))
-      );
+    let currentInspection: RegistryPackageTarballInspection | undefined;
+    let previousInspection: RegistryPackageTarballInspection | undefined;
+    let previousTarballUnavailable: string | undefined;
+    if (
+      options.deepTarballInspection &&
+      (options.analyzeTarballs || loaded.policy.requireTarballInspection)
+    ) {
+      const currentTarball = await registryTarballInspection({
+        registry,
+        cache: context.tarballCache,
+        manifest: dependency.manifest,
+        requireTarballInspection: loaded.policy.requireTarballInspection,
+        requireIntegrityMatch: loaded.policy.requireIntegrityMatch
+      });
+      currentInspection = currentTarball.inspection;
+      signals.push(...currentTarball.signals);
+
+      const previousTarball = await previousRegistryTarballInspection({
+        registry,
+        cache: context.tarballCache,
+        manifest: previousManifest,
+        requireIntegrityMatch: loaded.policy.requireIntegrityMatch
+      });
+      previousInspection = previousTarball.inspection;
+      previousTarballUnavailable = previousTarball.unavailable;
     }
+    signals.push(
+      ...artifactDiffSignals({
+        previousManifest,
+        currentManifest: dependency.manifest,
+        previousEntries: previousInspection?.entries,
+        currentEntries: currentInspection?.entries,
+        previousSize: inspectedPackageSize(previousInspection),
+        currentSize: inspectedPackageSize(currentInspection),
+        previousTarballUnavailable
+      })
+    );
 
     if (Object.keys(dependency.metadata.versions).length <= 1) {
       signals.push({
@@ -450,7 +610,8 @@ async function evaluateTransitiveDependencies(
         source: 'transitive',
         sourceType: 'registry'
       },
-      signals: withDependencyPath(signals, dependency.dependencyPath)
+      signals: withDependencyPath(signals, dependency.dependencyPath),
+      integrity: dependency.manifest.dist?.integrity
     });
   }
 
@@ -523,23 +684,31 @@ function registryTarballUninspectable(message: string, value?: unknown): RiskSig
   };
 }
 
-async function registryTarballSignals(input: {
+function inspectedPackageSize(
+  inspection: RegistryPackageTarballInspection | undefined
+): number | undefined {
+  return inspection?.entries.reduce((sum, entry) => sum + entry.size, 0);
+}
+
+async function registryTarballInspection(input: {
   registry: RegistryClient;
   cache: Map<string, Promise<RegistryPackageTarballInspection | undefined>>;
   manifest: PackageManifest;
   requireTarballInspection: boolean;
   requireIntegrityMatch: boolean;
-}): Promise<RiskSignal[]> {
+}): Promise<{ inspection?: RegistryPackageTarballInspection; signals: RiskSignal[] }> {
   const tarballUrl = input.manifest.dist?.tarball;
   if (!tarballUrl) {
     return input.requireTarballInspection
-      ? [
-          registryTarballUninspectable('Registry metadata does not include a package tarball URL', {
+      ? {
+          signals: [
+            registryTarballUninspectable('Registry metadata does not include a package tarball URL', {
             package: input.manifest.name,
             version: input.manifest.version
-          })
-        ]
-      : [];
+            })
+          ]
+        }
+      : { signals: [] };
   }
 
   const integrity = input.requireIntegrityMatch ? input.manifest.dist?.integrity : undefined;
@@ -553,28 +722,57 @@ async function registryTarballSignals(input: {
     const result = await inspection;
     if (!result) {
       return input.requireTarballInspection
-        ? [
-            registryTarballUninspectable(
+        ? {
+            signals: [
+              registryTarballUninspectable(
               'Registry client cannot fetch package tarballs',
               tarballUrl
-            )
-          ]
-        : [];
+              )
+            ]
+          }
+        : { signals: [] };
     }
     if (!result.manifest) {
-      return [
-        ...result.signals,
-        registryTarballUninspectable('Registry tarball package.json is missing', tarballUrl)
-      ];
+      return {
+        inspection: result,
+        signals: [
+          ...result.signals,
+          registryTarballUninspectable('Registry tarball package.json is missing', tarballUrl)
+        ]
+      };
     }
-    return [
-      ...result.signals,
-      ...lifecycleSignals(result.manifest, result.manifest),
-      ...manifestBehaviorSignals(result.manifest)
-    ];
+    return {
+      inspection: result,
+      signals: [
+        ...result.signals,
+        ...lifecycleSignals(result.manifest, result.manifest),
+        ...manifestBehaviorSignals(result.manifest)
+      ]
+    };
   } catch (error) {
-    return [registryTarballUninspectable('Unable to inspect registry package tarball', error)];
+    return {
+      signals: [registryTarballUninspectable('Unable to inspect registry package tarball', error)]
+    };
   }
+}
+
+async function previousRegistryTarballInspection(input: {
+  registry: RegistryClient;
+  cache: Map<string, Promise<RegistryPackageTarballInspection | undefined>>;
+  manifest?: PackageManifest;
+  requireIntegrityMatch: boolean;
+}): Promise<{ inspection?: RegistryPackageTarballInspection; unavailable?: string }> {
+  if (!input.manifest) return {};
+  if (!input.manifest.dist?.tarball) return {};
+  const result = await registryTarballInspection({
+    registry: input.registry,
+    cache: input.cache,
+    manifest: input.manifest,
+    requireTarballInspection: false,
+    requireIntegrityMatch: input.requireIntegrityMatch
+  });
+  if (result.inspection) return { inspection: result.inspection };
+  return { unavailable: result.signals[0]?.message ?? 'Previous package tarball could not be inspected' };
 }
 
 function approvedRegistryHosts(policyHosts: string[], env: ScanProjectOptions['env']): string[] {
@@ -620,6 +818,23 @@ async function projectPolicySignals(
     }
   }
 
+  if (
+    loaded.policyMode === 'emergency' ||
+    loaded.mode === 'ci' ||
+    loaded.policy.profile === 'production'
+  ) {
+    const credentialSignals = await analyzeCredentialExposure({
+      cwd: options.cwd,
+      env: options.env
+    });
+    if (credentialSignals.length > 0) {
+      findings.push({
+        candidate: { name: 'environment:credentials', source: 'environment' },
+        signals: credentialSignals
+      });
+    }
+  }
+
   return findings;
 }
 
@@ -629,15 +844,17 @@ export async function evaluatePackages(
   const loaded = await loadConfig({
     cwd: options.cwd,
     env: options.env,
-    profile: configProfile(options)
+    profile: configProfile(options),
+    policyMode: options.policyMode ?? (options.strict ? 'strict' : undefined)
   });
   const registry =
     options.registry ??
     new NpmRegistryClient({
       cwd: options.cwd,
       registryUrl: options.env?.npm_config_registry ?? options.env?.NPM_CONFIG_REGISTRY
-    });
+  });
   const allowlist = await loadAllowlist(options.cwd);
+  const scriptAllowlist = await loadScriptAllowlist(options.cwd);
   const exceptions = await loadExceptions(options.cwd);
   const findings = [];
   const context: EvaluationContext = {
@@ -649,15 +866,33 @@ export async function evaluatePackages(
         : undefined),
     tarballCache: new Map(),
     intelligenceFailures: new Map(),
-    transitiveEvaluated: new Set()
+    transitiveEvaluated: new Set(),
+    scriptAllowlist,
+    sourceVerifier: options.sourceVerifier ?? new GitHubSourceVerifier()
   };
 
-  for (const candidate of options.candidates) {
-    const evaluatedPackages = await evaluateCandidate(candidate, registry, options, context);
+  const evaluatedCandidateGroups = await mapWithConcurrency(
+    options.candidates,
+    options.maxConcurrentEvaluations ?? DEFAULT_CANDIDATE_CONCURRENCY,
+    (candidate) => evaluateCandidate(candidate, registry, options, context)
+  );
+
+  for (const evaluatedPackages of evaluatedCandidateGroups) {
     for (const evaluated of evaluatedPackages) {
+      evaluated.signals = withCandidateDependencyPath(evaluated.candidate, evaluated.signals);
       const allowlisted = Boolean(
         allowlist.match(evaluated.candidate.name, evaluated.candidate.version, options.now)
       );
+      const scriptAllowlistResult = applyScriptAllowlist({
+        signals: evaluated.signals,
+        allowlist: context.scriptAllowlist,
+        packageName: evaluated.candidate.name,
+        version: evaluated.candidate.version,
+        integrity: evaluated.integrity,
+        tarballSha256: evaluated.tarballSha256,
+        now: options.now
+      });
+      evaluated.signals = scriptAllowlistResult.signals;
       if (loaded.mode === 'ci' && loaded.policy.blockNewPackageNamesInCI && !allowlisted) {
         evaluated.signals.push({
           id: 'new-package-name-ci',
@@ -676,8 +911,27 @@ export async function evaluatePackages(
           candidate: evaluated.candidate,
           policy: loaded.policy,
           mode: loaded.mode,
+          policyMode: loaded.policyMode,
           strict: options.strict,
           allowlisted,
+          allowlist: allowlisted
+            ? { used: true, scope: 'package' }
+            : scriptAllowlistResult.used.length > 0
+              ? {
+                  used: true,
+                  scope: 'script',
+                  reason: scriptAllowlistResult.used
+                    .map((entry) => entry.justification)
+                    .join('; ')
+                }
+              : scriptAllowlistResult.failures.length > 0
+                ? {
+                    used: false,
+                    failures: [
+                      ...new Set(scriptAllowlistResult.failures.map((failure) => failure.reason))
+                    ]
+                  }
+                : { used: false },
           signals: evaluated.signals
         })
       );
@@ -690,6 +944,7 @@ export async function evaluatePackages(
         candidate: { name: `intelligence:${source}` },
         policy: loaded.policy,
         mode: loaded.mode,
+        policyMode: loaded.policyMode,
         strict: options.strict,
         signals: [signal]
       })
@@ -702,6 +957,7 @@ export async function evaluatePackages(
         candidate: projectFinding.candidate,
         policy: loaded.policy,
         mode: loaded.mode,
+        policyMode: loaded.policyMode,
         strict: options.strict,
         signals: projectFinding.signals
       })
@@ -712,6 +968,7 @@ export async function evaluatePackages(
     startedAt: (options.now ?? new Date()).toISOString(),
     toolVersion: TOOL_VERSION,
     mode: loaded.mode,
+    policyMode: loaded.policyMode,
     policyPath: loaded.path,
     configSource: loaded.source,
     findings: applyExceptions(exceptions, findings, options.now)

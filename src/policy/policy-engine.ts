@@ -2,6 +2,8 @@ import type {
   PackageCandidate,
   PackageFinding,
   PolicyConfig,
+  PolicyMode,
+  RiskCategory,
   RiskSignal,
   RuntimeMode
 } from '../core/types.js';
@@ -11,12 +13,37 @@ export interface DecidePackageInput {
   candidate: PackageCandidate;
   policy: PolicyConfig;
   mode: RuntimeMode;
+  policyMode?: PolicyMode;
   signals: RiskSignal[];
   strict?: boolean;
   allowlisted?: boolean;
+  allowlist?: PackageFinding['allowlist'];
 }
 
-function mustBlockSignal(signal: RiskSignal, policy: PolicyConfig, mode: RuntimeMode): boolean {
+function categoryForSignal(signal: RiskSignal): RiskCategory | undefined {
+  if (signal.riskCategory) return signal.riskCategory;
+  if (signal.id.includes('lifecycle')) return 'lifecycle_script_risk';
+  if (signal.id.includes('dependency')) return 'dependency_delta_risk';
+  if (signal.id.includes('tarball') || signal.id.includes('manifest') || signal.id.startsWith('source-'))
+    return 'artifact_diff_risk';
+  if (signal.id.includes('provenance') || signal.id.includes('signature')) return 'provenance_risk';
+  if (signal.id.startsWith('workflow-')) return 'ci_trust_boundary_risk';
+  if (signal.id.includes('credential')) return 'credential_exposure_risk';
+  if (signal.id.includes('name-confusion') || signal.id.includes('typosquat'))
+    return 'typosquat_risk';
+  if (signal.id.includes('frontend') || signal.id.includes('wallet'))
+    return 'frontend_runtime_risk';
+  if (signal.id.includes('emergency') || signal.id.includes('known-bad'))
+    return 'emergency_denylist_risk';
+  return undefined;
+}
+
+function mustBlockSignal(
+  signal: RiskSignal,
+  policy: PolicyConfig,
+  mode: RuntimeMode,
+  policyMode: PolicyMode
+): boolean {
   const hardBlockSignals = new Set([
     'registry-tarball-integrity-mismatch',
     'required-intelligence-unavailable',
@@ -26,13 +53,51 @@ function mustBlockSignal(signal: RiskSignal, policy: PolicyConfig, mode: Runtime
     'workflow-untrusted-checkout',
     'workflow-cache-poisoning-risk',
     'workflow-overprivileged-token',
-    'provenance-source-mismatch'
+    'workflow-oidc-cache-boundary',
+    'workflow-run-artifact-trust-boundary',
+    'workflow-publish-after-risky-install',
+    'provenance-source-mismatch',
+    'unexpected-provenance-source',
+    'emergency-denylist-match',
+    'lifecycle-install-downloader',
+    'lifecycle-powershell-downloader',
+    'lifecycle-shell-pipe',
+    'lifecycle-global-package-install',
+    'lifecycle-chmod-exec',
+    'lifecycle-package-manager-recursion',
+    'lifecycle-obfuscated-payload',
+    'lifecycle-native-binary-execution',
+    'lifecycle-bun-bootstrap'
   ]);
+  if (policyMode === 'emergency' && signal.severity !== 'info') return true;
+  if (
+    policyMode === 'strict' &&
+    [
+      'frontend-runtime-wallet-access',
+      'frontend-runtime-clipboard-mutation',
+      'frontend-runtime-transaction-mutation'
+    ].includes(signal.id)
+  ) {
+    return true;
+  }
+  if (
+    (policyMode === 'strict' || policyMode === 'emergency') &&
+    [
+      'source-tag-missing',
+      'source-commit-missing',
+      'source-tag-commit-mismatch',
+      'source-verification-unavailable'
+    ].includes(signal.id) &&
+    signal.canOverride === false
+  ) {
+    return true;
+  }
   if (hardBlockSignals.has(signal.id)) return true;
   if (signal.id === 'known-malicious-advisory' && policy.blockKnownMaliciousAdvisories) return true;
   if (
     (signal.id === 'lifecycle-script' || signal.id === 'new-lifecycle-script') &&
-    policy.blockLifecycleScripts
+    policy.blockLifecycleScripts &&
+    (policyMode === 'strict' || policyMode === 'emergency' || signal.id === 'lifecycle-script')
   )
     return true;
   if (
@@ -63,6 +128,21 @@ function mustBlockSignal(signal: RiskSignal, policy: PolicyConfig, mode: Runtime
   return false;
 }
 
+function requiresManualReview(signal: RiskSignal, policyMode: PolicyMode): boolean {
+  if (policyMode === 'emergency') return false;
+  if (signal.manualReview) return true;
+  return new Set([
+    'new-dependency-in-release',
+    'new-dependency-in-patch-release',
+    'new-binary-file',
+    'source-repository-changed',
+    'frontend-runtime-wallet-access',
+    'frontend-runtime-clipboard-mutation',
+    'frontend-runtime-transaction-mutation',
+    'medium-confidence-typosquat'
+  ]).has(signal.id);
+}
+
 function remediation(signals: RiskSignal[]): string[] {
   const values = signals.flatMap((signal) => signal.remediation ?? []);
   return values.length > 0
@@ -84,17 +164,36 @@ function isActionableSignal(signal: RiskSignal): boolean {
 }
 
 export function decidePackage(input: DecidePackageInput): PackageFinding {
-  const { candidate, policy, mode, signals, strict = false, allowlisted = false } = input;
-  const actionableSignals = signals.filter(isActionableSignal);
-  const scored = scoreSignals(signals);
-  const mustBlock = signals.some((signal) => mustBlockSignal(signal, policy, mode));
+  const {
+    candidate,
+    policy,
+    mode,
+    signals,
+    strict = false,
+    allowlisted = false,
+    allowlist,
+    policyMode = policy.policyMode
+  } = input;
+  const effectiveSignals = allowlisted
+    ? signals.filter((signal) => signal.id !== 'new-package-name-ci')
+    : signals;
+  const actionableSignals = effectiveSignals.filter(isActionableSignal);
+  const scored = scoreSignals(effectiveSignals);
+  const mustBlock = actionableSignals.some((signal) =>
+    mustBlockSignal(signal, policy, mode, policyMode)
+  );
+  const mustManualReview = actionableSignals.some((signal) =>
+    requiresManualReview(signal, policyMode)
+  );
   const hasWarn = actionableSignals.length > 0 || scored.score >= policy.maxRiskScoreWarn;
   let decision: PackageFinding['decision'] = 'allow';
 
-  if (mode === 'off' || allowlisted) {
+  if (mode === 'off') {
     decision = 'allow';
   } else if (mustBlock || scored.score >= policy.maxRiskScoreAllowed) {
     decision = 'block';
+  } else if (mustManualReview) {
+    decision = 'manual_review';
   } else if (hasWarn) {
     decision = mode === 'block' || strict ? 'block' : 'warn';
   }
@@ -103,6 +202,19 @@ export function decidePackage(input: DecidePackageInput): PackageFinding {
     ...remediation(actionableSignals),
     ...incidentResponseRemediation(decision)
   ];
+
+  const matchedSignals = [
+    ...new Set(actionableSignals.flatMap((signal) => [signal.id, ...(signal.matchedSignals ?? [])]))
+  ];
+  const firstCategory = actionableSignals.map(categoryForSignal).find(Boolean);
+  const evidenceSummary = actionableSignals
+    .flatMap((signal) => signal.evidence ?? [])
+    .map((evidence) => evidence.message)
+    .filter(Boolean)
+    .slice(0, 4)
+    .join('; ');
+  const dependencyPath = actionableSignals.find((signal) => signal.dependencyPath)?.dependencyPath;
+  const recommendedFix = recommendedActions[0] ?? 'No action required.';
 
   return {
     id: `${actionableSignals[0]?.id ?? 'clean'}:${candidate.name}@${candidate.version ?? candidate.spec ?? 'unknown'}`,
@@ -115,8 +227,19 @@ export function decidePackage(input: DecidePackageInput): PackageFinding {
       actionableSignals.length > 0
         ? actionableSignals.map((signal) => signal.message)
         : ['No policy issues detected'],
-    evidence: signals.flatMap((signal) => signal.evidence ?? []),
+    evidence: effectiveSignals.flatMap((signal) => signal.evidence ?? []),
     remediation: [...new Set(recommendedActions)],
+    riskCategory: firstCategory,
+    matchedSignals,
+    evidenceSummary,
+    recommendedFix,
+    policyMode,
+    dependencyPath,
+    killChain:
+      decision === 'block'
+        ? `Blocked: ${candidate.name}${candidate.version ? `@${candidate.version}` : ''} matched ${matchedSignals.join(', ') || 'policy'} risk. ${actionableSignals[0]?.message ?? 'Policy blocked this target.'}`
+        : undefined,
+    allowlist: allowlist ?? (allowlisted ? { used: true, scope: 'package' } : { used: false }),
     canOverride:
       decision !== 'allow' &&
       policy.allowOverridesWithJustification &&

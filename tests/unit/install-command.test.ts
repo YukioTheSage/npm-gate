@@ -160,7 +160,7 @@ describe('install command delegation', () => {
 
     expect(mocks.resolvePackageManager).toHaveBeenCalledWith({
       cwd: process.cwd(),
-      env: process.env,
+      env: expect.any(Object),
       requested: 'pnpm'
     });
     expect(mocks.runPackageManager).toHaveBeenCalledWith(
@@ -209,5 +209,59 @@ describe('install command delegation', () => {
     );
     expect(mocks.runPackageManager).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(0);
+  });
+
+  test('passes explicit policy mode into install evaluation', async () => {
+    mocks.evaluatePackages.mockResolvedValue({
+      startedAt: '2026-05-14T00:00:00.000Z',
+      toolVersion: '0.1.0',
+      mode: 'warn',
+      policyMode: 'emergency',
+      configSource: 'default',
+      findings: [],
+      summary: { allow: 0, warn: 0, block: 0, suppressed: 0 }
+    });
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    await makeProgram().parseAsync(['install', 'left-pad', '--dry-run', '--policy-mode', 'emergency'], {
+      from: 'user'
+    });
+
+    expect(mocks.evaluatePackages).toHaveBeenCalledWith(
+      expect.objectContaining({ policyMode: 'emergency' })
+    );
+  });
+
+  test('strict policy mode blocks manual review findings before delegation', async () => {
+    mocks.evaluatePackages.mockResolvedValue({
+      startedAt: '2026-05-14T00:00:00.000Z',
+      toolVersion: '0.1.0',
+      mode: 'warn',
+      policyMode: 'strict',
+      configSource: 'default',
+      findings: [
+        {
+          id: 'dependency-delta:fixture@1.0.1',
+          package: 'fixture',
+          version: '1.0.1',
+          decision: 'manual_review',
+          severity: 'medium',
+          score: 45,
+          reasons: ['Patch release added a new dependency'],
+          evidence: [],
+          remediation: ['Review the dependency delta before installing'],
+          canOverride: true
+        }
+      ],
+      summary: { allow: 0, warn: 0, block: 0, suppressed: 0 }
+    });
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    await makeProgram().parseAsync(['install', 'fixture', '--policy-mode', 'strict'], {
+      from: 'user'
+    });
+
+    expect(mocks.runPackageManager).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
   });
 });

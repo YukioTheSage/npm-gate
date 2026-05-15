@@ -25,7 +25,41 @@ describe('config loader', () => {
     expect(loaded.policy.minimumReleaseAgeHours).toBe(24);
     expect(loaded.policy.protectedPackageNames).toEqual(['lodash']);
     expect(loaded.mode).toBe('ci');
+    expect(loaded.policyMode).toBe('strict');
     expect(loaded.source).toBe('file');
+  });
+
+  test('resolves policy mode from config, strict flags, production, and emergency env', async () => {
+    const balancedRoot = await mkdtemp(join(tmpdir(), 'npm-gate-balanced-policy-mode-'));
+    await writeFile(
+      join(balancedRoot, 'npm-gate.config.json'),
+      JSON.stringify({ policyMode: 'balanced' })
+    );
+
+    const balanced = await loadConfig({
+      cwd: balancedRoot,
+      env: { NPM_GATE_MODE: 'warn' }
+    });
+    expect(balanced.policy.policyMode).toBe('balanced');
+    expect(balanced.policyMode).toBe('balanced');
+
+    const strict = await loadConfig({
+      cwd: balancedRoot,
+      env: { NPM_GATE_MODE: 'warn' },
+      policyMode: 'strict'
+    });
+    expect(strict.policyMode).toBe('strict');
+
+    const emergency = await loadConfig({
+      cwd: balancedRoot,
+      env: { NPM_GATE_MODE: 'warn', NPM_GATE_POLICY_MODE: 'emergency' }
+    });
+    expect(emergency.policyMode).toBe('emergency');
+
+    const productionRoot = await mkdtemp(join(tmpdir(), 'npm-gate-production-policy-mode-'));
+    await writeFile(join(productionRoot, 'npm-gate.config.json'), JSON.stringify({ profile: 'production' }));
+    const production = await loadConfig({ cwd: productionRoot, env: { NPM_GATE_MODE: 'warn' } });
+    expect(production.policyMode).toBe('strict');
   });
 
   test('applies production and audit-only policy profiles before explicit overrides', async () => {
@@ -45,6 +79,7 @@ describe('config loader', () => {
     });
 
     expect(production.policy.profile).toBe('production');
+    expect(production.policyMode).toBe('strict');
     expect(production.policy.requireTarballInspection).toBe(true);
     expect(production.policy.requireIntegrityMatch).toBe(true);
     expect(production.policy.inspectTransitiveDependencies).toBe(true);

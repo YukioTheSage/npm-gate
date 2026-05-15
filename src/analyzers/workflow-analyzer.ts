@@ -17,6 +17,8 @@ interface WorkflowStep {
 
 interface WorkflowJob {
   permissions?: unknown;
+  'runs-on'?: unknown;
+  runsOn?: unknown;
   steps?: WorkflowStep[];
 }
 
@@ -30,6 +32,9 @@ interface WorkflowFile {
 const fullShaRef = /@[a-f0-9]{40}$/i;
 const untrustedContext = /github\.event\.pull_request|github\.head_ref|github\.event\.workflow_run/;
 const installOrBuildCommand = /\b(?:npm|pnpm|yarn)\s+(?:install|ci|test|run|build)\b/;
+const riskyInstallCommand =
+  /\b(?:npm|pnpm|yarn)\s+(?:install|ci)\b(?![^\n]*(?:--ignore-scripts|--ignore-scripts=true))/;
+const publishCommand = /\b(?:npm|pnpm)\s+publish\b/;
 const writePermissions = new Set(['write', 'all']);
 const broadPermissionKeys = new Set(['contents', 'packages', 'actions', 'id-token']);
 
@@ -45,6 +50,8 @@ function workflowSignal(
     id,
     score,
     severity,
+    riskCategory: 'ci_trust_boundary_risk',
+    matchedSignals: [id],
     message,
     evidence: [
       {
@@ -108,8 +115,35 @@ function usesCache(steps: WorkflowStep[]): boolean {
   });
 }
 
+function downloadsArtifact(steps: WorkflowStep[]): boolean {
+  return steps.some(
+    (step) =>
+      (typeof step.uses === 'string' && /^actions\/download-artifact@/i.test(step.uses)) ||
+      (typeof step.run === 'string' && /\bdownload-artifact\b/i.test(step.run))
+  );
+}
+
 function executesPackageManager(steps: WorkflowStep[]): boolean {
   return steps.some((step) => typeof step.run === 'string' && installOrBuildCommand.test(step.run));
+}
+
+function hasRiskyInstall(steps: WorkflowStep[]): boolean {
+  return steps.some((step) => typeof step.run === 'string' && riskyInstallCommand.test(step.run));
+}
+
+function publishesPackage(steps: WorkflowStep[]): boolean {
+  return steps.some((step) => typeof step.run === 'string' && publishCommand.test(step.run));
+}
+
+function hasIdTokenWrite(workflowPermissions: unknown, jobPermissions: unknown): boolean {
+  return broadPermissions(workflowPermissions, jobPermissions).includes('id-token: write');
+}
+
+function isSelfHostedRunner(job: WorkflowJob): boolean {
+  const value = job['runs-on'] ?? job.runsOn;
+  if (typeof value === 'string') return value.includes('self-hosted');
+  if (Array.isArray(value)) return value.some((entry) => String(entry).includes('self-hosted'));
+  return false;
 }
 
 function unpinnedActions(steps: WorkflowStep[]): string[] {
@@ -189,6 +223,46 @@ async function analyzeWorkflowFile(
           {
             job: jobName
           }
+        )
+      );
+    }
+    if (events.has('workflow_run') && downloadsArtifact(steps)) {
+      signals.push(
+        workflowSignal(
+          'workflow-run-artifact-trust-boundary',
+          'workflow_run job consumes artifacts across a trust boundary',
+          file,
+          { job: jobName, events: [...events] }
+        )
+      );
+    }
+    if (hasIdTokenWrite(parsed.permissions, job.permissions) && usesCache(steps)) {
+      signals.push(
+        workflowSignal(
+          'workflow-oidc-cache-boundary',
+          'OIDC token minting is combined with package-manager cache restore',
+          file,
+          { job: jobName }
+        )
+      );
+    }
+    if (dangerousTrigger && isSelfHostedRunner(job)) {
+      signals.push(
+        workflowSignal(
+          'workflow-self-hosted-untrusted-runner',
+          'Untrusted workflow context can run on a self-hosted runner',
+          file,
+          { job: jobName }
+        )
+      );
+    }
+    if (publishesPackage(steps) && hasRiskyInstall(steps)) {
+      signals.push(
+        workflowSignal(
+          'workflow-publish-after-risky-install',
+          'Workflow publishes after package installation with lifecycle scripts enabled',
+          file,
+          { job: jobName }
         )
       );
     }

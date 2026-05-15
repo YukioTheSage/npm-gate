@@ -42,11 +42,45 @@ Direct Git sources are not cloned. They warn locally and block in strict, block,
 NPM_GATE_MODE=ci npm-gate ci --json
 ```
 
+## Strict Local Gate Without Install Execution
+
+```sh
+npm-gate install axios --dry-run --policy-mode strict --json
+```
+
+## Emergency Lockfile Rescan
+
+```sh
+npm-gate emergency --json > npm-gate-emergency-report.json
+```
+
 ## Add an Allowlist Entry
 
 ```sh
 npm-gate allow lodash@^4.17.21 --reason "Approved base dependency SEC-42"
 ```
+
+Package allowlists approve package-name policy only. They do not authorize lifecycle script execution.
+
+## Add a Lifecycle Script Allowlist Entry
+
+Create `.npm-gate/script-allowlist.json`:
+
+```json
+[
+  {
+    "package": "native-addon",
+    "version": "1.0.0",
+    "script": "install",
+    "commandSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "integrity": "sha512-reviewed-integrity",
+    "expiresAt": "2026-06-30T00:00:00.000Z",
+    "justification": "Reviewed native install script in SEC-42"
+  }
+]
+```
+
+The package name, exact version, script name, command hash, justification, and integrity or tarball hash must match. Expired entries and package-name-only entries do not authorize execution.
 
 ## Explain a Package
 
@@ -65,3 +99,52 @@ npm-gate explain workflow-cache-poisoning-risk:.github/workflows/release.yml
 ```sh
 npm-gate report --format json > npm-gate-report.json
 ```
+
+## JSON Finding Shape
+
+```json
+{
+  "package": "fixture",
+  "version": "1.0.1",
+  "decision": "block",
+  "riskCategory": "lifecycle_script_risk",
+  "matchedSignals": ["lifecycle-script", "lifecycle-install-downloader"],
+  "evidenceSummary": "postinstall downloads remote code",
+  "recommendedFix": "Remove the lifecycle script or review the artifact before installing",
+  "policyMode": "strict",
+  "allowlist": { "used": false },
+  "dependencyPath": ["root@1.0.0", "fixture@1.0.1"]
+}
+```
+
+The original JSON fields remain present. The additional fields are additive for CI consumers that want policy-mode and kill-chain context.
+
+## Configure Source Verification
+
+```json
+{
+  "sourceVerification": {
+    "enabled": true,
+    "rules": [
+      {
+        "package": "@company/core",
+        "repository": "company/core",
+        "tagTemplate": "v{version}",
+        "commit": "expected-release-commit",
+        "required": true
+      }
+    ]
+  }
+}
+```
+
+Source verification is optional and package-scoped. It checks configured GitHub tags and commits but does not make provenance or trusted publishing a safety bypass.
+
+## Generate Enriched SARIF
+
+```sh
+npm-gate ci --sarif > npm-gate.sarif
+npm-gate report --format sarif > npm-gate.sarif
+```
+
+SARIF result properties include risk category, policy mode, matched signals, dependency path, allowlist state, and kill-chain context for CI systems that consume structured metadata.

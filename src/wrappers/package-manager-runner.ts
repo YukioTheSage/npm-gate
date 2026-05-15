@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { pathExists } from '../utils/fs.js';
+import { redactSecrets, resolveCommandForSpawn } from '../utils/exec.js';
 
 export type PackageManager = 'npm' | 'pnpm';
 
@@ -28,17 +29,30 @@ export async function resolvePackageManager(
   return (await pathExists(join(input.cwd, 'pnpm-lock.yaml'))) ? 'pnpm' : 'npm';
 }
 
-export function runPackageManager(
+export async function runPackageManager(
   packageManager: PackageManager,
   args: string[],
   cwd: string
 ): Promise<number> {
+  let resolved;
+  try {
+    resolved = await resolveCommandForSpawn(packageManager, args, { env: process.env });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${redactSecrets(message)}\n`);
+    return 2;
+  }
+
   return new Promise((resolve) => {
-    const child = spawn(packageManager, args, {
+    const child = spawn(resolved.command, resolved.args, {
       cwd,
       stdio: 'inherit',
-      shell: process.platform === 'win32',
+      shell: false,
       env: { ...process.env }
+    });
+    child.on('error', (error) => {
+      process.stderr.write(`${redactSecrets(error.message)}\n`);
+      resolve(2);
     });
     child.on('close', (code) => resolve(code ?? 2));
   });

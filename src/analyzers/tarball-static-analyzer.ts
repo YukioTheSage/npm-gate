@@ -1,5 +1,6 @@
 import { isAbsolute, normalize, sep, win32 } from 'node:path';
 import type { RiskSignal, TarballEntry } from '../core/types.js';
+import { analyzeFrontendRuntimeEntries } from './frontend-runtime-analyzer.js';
 
 const hiddenDirectories = new Set(['.github', '.vscode', '.claude']);
 const binaryExtensions = new Set(['.exe', '.dll', '.so', '.dylib', '.node', '.elf']);
@@ -236,5 +237,5 @@ export function analyzeTarballEntries(entries: TarballEntry[]): { signals: RiskS
     }
   }
 
-  return { signals };
+  return { signals: [...signals, ...analyzeFrontendRuntimeEntries(entries)] };
 }

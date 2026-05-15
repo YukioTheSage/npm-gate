@@ -1,13 +1,20 @@
 import { dirname, join, parse, resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
-import type { LoadedConfig, PolicyConfig, PolicyProfile, RuntimeMode } from '../core/types.js';
+import type {
+  LoadedConfig,
+  PolicyConfig,
+  PolicyMode,
+  PolicyProfile,
+  RuntimeMode
+} from '../core/types.js';
 import { defaultPolicy } from './default-policy.js';
-import { policySchema, runtimeModeSchema } from './schema.js';
+import { policyModeSchema, policySchema, runtimeModeSchema } from './schema.js';
 
 export interface LoadConfigOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
   profile?: PolicyProfile;
+  policyMode?: PolicyMode;
 }
 
 const CONFIG_FILE = 'npm-gate.config.json';
@@ -39,10 +46,23 @@ function resolveMode(env: LoadConfigOptions['env']): RuntimeMode {
   return runtimeModeSchema.parse(value);
 }
 
+function resolvePolicyMode(
+  options: LoadConfigOptions,
+  profile: PolicyProfile,
+  configuredPolicyMode: PolicyMode,
+  runtimeMode: RuntimeMode
+): PolicyMode {
+  const explicit = options.policyMode ?? options.env?.NPM_GATE_POLICY_MODE;
+  if (explicit) return policyModeSchema.parse(explicit);
+  if (runtimeMode === 'ci' || profile === 'production') return 'strict';
+  return configuredPolicyMode;
+}
+
 function profileDefaults(profile: PolicyProfile): Partial<PolicyConfig> {
   if (profile === 'production') {
     return {
       profile,
+      policyMode: 'strict',
       blockLifecycleScripts: true,
       warnLifecycleScripts: true,
       blockGitDependencies: true,
@@ -97,20 +117,24 @@ function profileDefaults(profile: PolicyProfile): Partial<PolicyConfig> {
 export async function loadConfig(options: LoadConfigOptions): Promise<LoadedConfig> {
   const path = await findConfig(options.cwd);
   const raw = path ? await readJson(path) : {};
-  const rawObject = raw as { profile?: PolicyProfile };
+  const rawObject = raw as { profile?: PolicyProfile; policyMode?: PolicyMode };
   const profile = options.profile ?? rawObject.profile ?? defaultPolicy.profile;
-  const policy = policySchema.parse({
+  const parsedPolicy = policySchema.parse({
     ...defaultPolicy,
     ...profileDefaults(profile),
     ...rawObject,
     profile
   });
+  const mode = resolveMode(options.env);
+  const policyMode = resolvePolicyMode(options, profile, parsedPolicy.policyMode, mode);
+  const policy: PolicyConfig = { ...parsedPolicy, policyMode };
 
   return {
     policy,
     source: path ? 'file' : 'default',
     path,
-    mode: resolveMode(options.env)
+    mode,
+    policyMode
   };
 }
 

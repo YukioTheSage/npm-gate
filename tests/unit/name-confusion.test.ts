@@ -20,4 +20,11 @@ describe('name confusion analyzer', () => {
       confidence: 'high'
     });
   });
+
+  test('detects namespace, token-order, missing-hyphen, and suffix confusion', () => {
+    expect(detectNameConfusion('@lod/ash', ['lodash'])?.confidence).toBe('high');
+    expect(detectNameConfusion('dom-react', ['react-dom'])?.confidence).toBe('medium');
+    expect(detectNameConfusion('reactdom', ['react-dom'])?.confidence).toBe('high');
+    expect(detectNameConfusion('crypto-js-secure', ['crypto-js'])?.confidence).toBe('medium');
+  });
 });

@@ -92,4 +92,92 @@ describe('policy engine', () => {
       expect(ci.decision, `${signalId} ci`).toBe('block');
     }
   });
+
+  test('produces manual review decisions and enriched finding fields', () => {
+    const finding = decidePackage({
+      candidate: { name: 'fixture', version: '1.2.3' },
+      policy: { ...defaultPolicy, policyMode: 'balanced' },
+      mode: 'warn',
+      policyMode: 'balanced',
+      signals: [
+        {
+          id: 'new-dependency-in-patch-release',
+          score: 30,
+          severity: 'medium',
+          message: 'Patch release introduced a new dependency',
+          riskCategory: 'dependency_delta_risk',
+          matchedSignals: ['patch dependency delta'],
+          evidence: [
+            {
+              type: 'manifest-diff',
+              message: 'New dependency added in patch release',
+              value: { dependencyPath: ['fixture@1.2.3', 'new-dep@1.0.0'] }
+            }
+          ],
+          remediation: ['Review the new dependency chain before install.'],
+          canOverride: true,
+          manualReview: true
+        }
+      ]
+    });
+
+    expect(finding.decision).toBe('manual_review');
+    expect(finding.riskCategory).toBe('dependency_delta_risk');
+    expect(finding.policyMode).toBe('balanced');
+    expect(finding.matchedSignals).toEqual(['new-dependency-in-patch-release', 'patch dependency delta']);
+    expect(finding.evidenceSummary).toContain('New dependency added in patch release');
+    expect(finding.recommendedFix).toBe('Review the new dependency chain before install.');
+  });
+
+  test('package allowlists do not suppress lifecycle execution risk', () => {
+    const finding = decidePackage({
+      candidate: { name: 'fixture', version: '1.0.0' },
+      policy: defaultPolicy,
+      mode: 'ci',
+      policyMode: 'strict',
+      allowlisted: true,
+      signals: [
+        {
+          id: 'lifecycle-install-downloader',
+          score: 70,
+          severity: 'critical',
+          message: 'Lifecycle script downloads and executes remote code',
+          riskCategory: 'lifecycle_script_risk',
+          evidence: [{ type: 'manifest-script', message: 'postinstall script is present' }],
+          remediation: ['Remove the downloader lifecycle script.'],
+          canOverride: false
+        }
+      ]
+    });
+
+    expect(finding.decision).toBe('block');
+    expect(finding.allowlist?.used).toBe(true);
+    expect(finding.allowlist?.scope).toBe('package');
+  });
+
+  test('strict policy blocks high-confidence frontend runtime mutation signals', () => {
+    for (const signalId of [
+      'frontend-runtime-wallet-access',
+      'frontend-runtime-clipboard-mutation',
+      'frontend-runtime-transaction-mutation'
+    ]) {
+      const balanced = decidePackage({
+        candidate: { name: 'frontend-fixture', version: '1.0.1' },
+        policy: defaultPolicy,
+        mode: 'warn',
+        policyMode: 'balanced',
+        signals: [{ id: signalId, score: 40, severity: 'medium', message: signalId }]
+      });
+      expect(balanced.decision, `${signalId} balanced`).toBe('manual_review');
+
+      const strict = decidePackage({
+        candidate: { name: 'frontend-fixture', version: '1.0.1' },
+        policy: defaultPolicy,
+        mode: 'warn',
+        policyMode: 'strict',
+        signals: [{ id: signalId, score: 40, severity: 'medium', message: signalId }]
+      });
+      expect(strict.decision, `${signalId} strict`).toBe('block');
+    }
+  });
 });

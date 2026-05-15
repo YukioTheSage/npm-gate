@@ -4,14 +4,26 @@ import { parse as parseYaml } from 'yaml';
 import type { PackageCandidate } from '../core/types.js';
 import { pathExists } from '../utils/fs.js';
 
+interface PackageLockEntry {
+  name?: string;
+  version?: string;
+}
+
+interface PackageLock {
+  name?: string;
+  version?: string;
+  packages?: Record<string, PackageLockEntry>;
+  dependencies?: Record<string, PackageLockEntry | string>;
+}
+
 function depCandidates(
-  dependencies: Record<string, any> | undefined,
+  dependencies: Record<string, PackageLockEntry | string> | undefined,
   source: string
 ): PackageCandidate[] {
   return Object.entries(dependencies ?? {}).map(([name, value]) => ({
     name,
-    version: typeof value === 'string' ? value : value?.version,
-    spec: typeof value === 'string' ? value : value?.version,
+    version: typeof value === 'string' ? value : value.version,
+    spec: typeof value === 'string' ? value : value.version,
     source
   }));
 }
@@ -28,6 +40,69 @@ function packageNameFromNodeModulesPath(path: string): string | undefined {
     return second ? `${first}/${second}` : undefined;
   }
   return first;
+}
+
+function packageSegmentsFromNodeModulesPath(path: string): string[] {
+  const parts = path.split(/[\\/]+/);
+  const packages: string[] = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    if (parts[index] !== 'node_modules') continue;
+    const first = parts[index + 1];
+    if (!first) continue;
+    if (first.startsWith('@')) {
+      const second = parts[index + 2];
+      if (second) packages.push(`${first}/${second}`);
+      index += 2;
+    } else {
+      packages.push(first);
+      index += 1;
+    }
+  }
+  return packages;
+}
+
+function packageKeyFromSegments(segments: string[]): string {
+  return segments.map((segment) => `node_modules/${segment}`).join('/');
+}
+
+function packageLabel(name: string, version?: string): string {
+  return `${name}@${version ?? 'unknown'}`;
+}
+
+function rootDependencyPath(lock: PackageLock): string[] {
+  const root = lock.packages?.[''];
+  const name = root?.name ?? lock.name;
+  const version = root?.version ?? lock.version;
+  return name && version ? [packageLabel(name, version)] : [];
+}
+
+function dependencyPathForPackageKey(
+  lock: PackageLock,
+  key: string,
+  entry: PackageLockEntry
+): string[] | undefined {
+  const segments = packageSegmentsFromNodeModulesPath(key);
+  if (segments.length === 0) return undefined;
+  const path = rootDependencyPath(lock);
+  for (let index = 0; index < segments.length; index += 1) {
+    const name = segments[index]!;
+    const packageKey = packageKeyFromSegments(segments.slice(0, index + 1));
+    const version =
+      index === segments.length - 1 ? entry.version : lock.packages?.[packageKey]?.version;
+    path.push(packageLabel(name, version));
+  }
+  return path;
+}
+
+function dependencyPathForTopLevelDependency(
+  lock: PackageLock,
+  name: string,
+  entry: PackageLockEntry | string
+): string[] | undefined {
+  const path = rootDependencyPath(lock);
+  if (path.length === 0) return undefined;
+  path.push(packageLabel(name, typeof entry === 'string' ? entry : entry.version));
+  return path;
 }
 
 function parsePnpmPackageKey(key: string): { name: string; version: string } | undefined {
@@ -49,10 +124,20 @@ export async function scanPackageLock(cwd: string): Promise<PackageCandidate[]> 
   for (const file of files) {
     const path = join(cwd, file);
     if (!(await pathExists(path))) continue;
-    const lock = JSON.parse(await readFile(path, 'utf8')) as any;
-    candidates.push(...depCandidates(lock.dependencies, file));
+    const lock = JSON.parse(await readFile(path, 'utf8')) as PackageLock;
+    candidates.push(
+      ...depCandidates(lock.dependencies, file).map((candidate) => {
+        const entry = lock.dependencies?.[candidate.name];
+        return {
+          ...candidate,
+          dependencyPath: entry
+            ? dependencyPathForTopLevelDependency(lock, candidate.name, entry)
+            : undefined
+        };
+      })
+    );
     if (lock.packages) {
-      for (const [key, value] of Object.entries(lock.packages as Record<string, any>)) {
+      for (const [key, value] of Object.entries(lock.packages)) {
         if (!key.startsWith('node_modules/')) continue;
         const name = packageNameFromNodeModulesPath(key);
         if (!name) continue;
@@ -60,7 +145,8 @@ export async function scanPackageLock(cwd: string): Promise<PackageCandidate[]> 
           name,
           version: value.version,
           spec: value.version,
-          source: file
+          source: file,
+          dependencyPath: dependencyPathForPackageKey(lock, key, value)
         });
       }
     }

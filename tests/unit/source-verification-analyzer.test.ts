@@ -13,6 +13,18 @@ const verifier: SourceVerifier = {
   },
   async hasCommit(repository: string, commit: string) {
     return repository === 'owner/pkg' && ['abc123', 'def456'].includes(commit);
+  },
+  async fetchFile(repository: string, ref: string, path: string) {
+    if (repository !== 'owner/pkg' || ref !== 'abc123' || path !== 'package.json') {
+      return undefined;
+    }
+    return JSON.stringify({
+      name: 'pkg',
+      version: '1.0.0',
+      scripts: { test: 'vitest' },
+      dependencies: { leftpad: '1.0.0' },
+      repository: { type: 'git', url: 'https://github.com/owner/pkg.git' }
+    });
   }
 };
 
@@ -128,5 +140,36 @@ describe('source verification analyzer', () => {
       id: 'source-verification-unavailable',
       canOverride: false
     });
+  });
+
+  test('compares published manifest against configured source manifest', async () => {
+    const signals = await sourceVerificationSignals({
+      packageName: 'pkg',
+      version: '1.0.0',
+      currentManifest: {
+        name: 'pkg',
+        version: '1.0.0',
+        scripts: { postinstall: 'node install.js' },
+        dependencies: { leftpad: '1.0.0', unexpected: '9.9.9' },
+        repository: { type: 'git', url: 'https://github.com/owner/pkg.git' }
+      },
+      rule: {
+        package: 'pkg',
+        repository: 'owner/pkg',
+        tagTemplate: 'v{version}',
+        commit: 'abc123',
+        packageJsonPath: 'package.json',
+        required: true
+      },
+      verifier
+    });
+
+    expect(signals).toEqual([
+      expect.objectContaining({
+        id: 'source-manifest-mismatch',
+        canOverride: false,
+        matchedSignals: expect.arrayContaining(['scripts', 'dependencies'])
+      })
+    ]);
   });
 });

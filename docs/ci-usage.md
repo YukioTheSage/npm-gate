@@ -6,9 +6,10 @@ Set `NPM_GATE_MODE=ci` to enable CI-specific blocking defaults. Prefer `npm-gate
 NPM_GATE_MODE=ci npm-gate scan --production
 NPM_GATE_POLICY_MODE=strict npm-gate scan --production --json
 NPM_GATE_MODE=ci npm-gate ci --json
+NPM_GATE_MODE=ci npm-gate ci --release-audit --json
 ```
 
-Default CI scans keep transitive analysis bounded for predictable runtime. Use `npm-gate ci --deep-tarballs` only for slower release audits that should also fetch and inspect transitive dependency tarballs.
+Default CI scans keep transitive analysis bounded for predictable runtime. Use `npm-gate ci --release-audit` for slower release or incident audits that should also fetch and inspect transitive dependency tarballs. The lower-level `--deep-tarballs` flag remains available for scripts that only need to opt into deep artifact inspection.
 
 In bootstrap CI, install dependencies with lifecycle scripts disabled before running the local gate binary:
 
@@ -23,6 +24,26 @@ For one-off CI usage, pin an approved version with
 `pnpm dlx npm-gate@<approved-version> ci --json`.
 
 The repository CI also runs `pnpm smoke:pack` after build. That smoke packs the CLI, installs the packed tarball into a temporary project, and verifies local plus configured-registry remote tarball scans without relying on live package fixtures.
+
+## Local Incident Intelligence
+
+npm-gate does not pull live incident feeds in CI. Import reviewed external intelligence into `npm-gate-advisories.json` at the project root:
+
+```json
+{
+  "packages": [
+    {
+      "name": "compromised-package",
+      "versions": ["1.2.3", "1.2.4"],
+      "type": "malicious",
+      "severity": "critical",
+      "summary": "Confirmed malicious publish SEC-2026-001"
+    }
+  ]
+}
+```
+
+Malicious records block matching versions. Use `ci --release-audit` after adding incident data so direct and transitive tarballs are inspected before release.
 
 Exit codes:
 

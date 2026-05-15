@@ -414,4 +414,35 @@ describe('scanProject', () => {
       ])
     );
   });
+
+  test('reports project source CDN findings as project-level runtime risk', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'npm-gate-project-runtime-'));
+    await writeFile(
+      join(cwd, 'package.json'),
+      JSON.stringify({ private: true, dependencies: {} })
+    );
+    await writeFile(
+      join(cwd, 'index.html'),
+      '<script src="https://cdn.example/lottie-player@latest/index.js"></script>'
+    );
+
+    const report = await scanProject({
+      cwd,
+      registry,
+      env: { NPM_GATE_MODE: 'warn' },
+      policyMode: 'strict',
+      now: new Date('2026-05-14T00:00:00.000Z')
+    });
+
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          package: 'project:runtime-sources',
+          decision: 'block',
+          riskCategory: 'frontend_runtime_risk',
+          matchedSignals: expect.arrayContaining(['project-cdn-latest'])
+        })
+      ])
+    );
+  });
 });

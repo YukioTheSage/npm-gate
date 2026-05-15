@@ -11,11 +11,13 @@ export function registerCiCommand(program: Command): void {
     .option('--json', 'print JSON report')
     .option('--sarif', 'print SARIF report')
     .option('--deep-tarballs', 'also inspect tarballs for transitive dependency closure')
+    .option('--release-audit', 'run release and incident audit checks, including deep tarballs')
     .option('--previous-package-lock <path>', 'compare package-lock integrity against a baseline')
     .action(async (options: {
       json?: boolean;
       sarif?: boolean;
       deepTarballs?: boolean;
+      releaseAudit?: boolean;
       previousPackageLock?: string;
     }) => {
       const env = { ...process.env, NPM_GATE_MODE: 'ci' };
@@ -26,7 +28,7 @@ export function registerCiCommand(program: Command): void {
         policyMode: 'strict',
         production: true,
         analyzeTarballs: true,
-        deepTarballInspection: options.deepTarballs,
+        deepTarballInspection: Boolean(options.deepTarballs || options.releaseAudit),
         previousPackageLockPath: options.previousPackageLock
       });
       if (options.sarif) {

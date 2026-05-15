@@ -65,13 +65,13 @@ Decisions are `allow`, `warn`, `manual_review`, or `block`.
 - `local-tarball` sources are checked with safe tar path validation, static filename analysis, SHA-256 evidence, and a capped `package/package.json` manifest read.
 - `remote-tarball` sources are inspected only when the URL belongs to the configured npm registry or `registry.npmjs.org`.
 - `remote-tarball-unsupported` sources and arbitrary remote tarball hosts are blocked.
-- `git` sources are not cloned. They warn locally and block in `ci`, `block`, or strict mode.
+- `git` sources are not cloned. They warn locally and block in `ci`, `block`, strict, or emergency mode.
 
 Info-only evidence such as a tarball hash does not create a warning by itself. Lifecycle scripts, unsafe or unreadable sources, missing manifests, suspicious tarball entries, credential-harvesting patterns, install downloaders, unsupported remote tarballs, and configured-registry fetch failures are normal policy signals.
 
 ## Lifecycle Execution Policy
 
-npm-gate inspects `preinstall`, `install`, `postinstall`, `prepare`, `prepublish`, `prepublishOnly`, `prepack`, `postpack`, and suspicious `pre*` or `post*` script variants. High-risk script signals include shell interpreters, downloader commands, shell pipes, PowerShell web requests, global package installs, `chmod +x` followed by execution, package-manager recursion, Bun or runtime bootstrap behavior, direct native binary execution, base64 payloads, `eval`, and `Function` constructor use.
+npm-gate inspects `preinstall`, `install`, `postinstall`, `prepare`, `prepublish`, `prepublishOnly`, `prepack`, `postpack`, and suspicious `pre*` or `post*` script variants. High-risk script signals include shell interpreters, downloader commands, shell pipes, PowerShell web requests, global package installs, `chmod +x` followed by execution, package-manager recursion, Bun or runtime bootstrap behavior, direct native binary execution, Windows native loader execution such as `rundll32` or `regsvr32`, base64 payloads, `eval`, and `Function` constructor use.
 
 Strict mode blocks new or changed lifecycle scripts and high-risk install-time patterns. Balanced mode blocks obvious execution risk and marks newly added lifecycle hooks for manual review. Emergency mode blocks all new or changed lifecycle scripts unless an exact script hash allowlist entry matches.
 
@@ -79,7 +79,7 @@ Package allowlists are not lifecycle execution allowlists. A lifecycle script al
 
 ## Artifact And Dependency Delta Policy
 
-Artifact diffing compares package manifests, dependency additions and removals, script additions or changes, binary and suspicious file additions, package-size deltas, repository metadata changes, and tarball/source mismatch metadata when available. When tarball inspection is enabled, npm-gate fetches the current and nearest previous version tarballs through the registry client, reuses the tarball cache, and compares their entry lists and package sizes. Package.json-only lifecycle additions block. Patch or minor releases that add dependencies require review, and a newly added dependency with an install script or high-confidence typosquat signal blocks.
+Artifact diffing compares package manifests, dependency additions and removals, script additions or changes, binary and suspicious file additions, package-size deltas, file-count deltas, repository metadata changes, and tarball/source mismatch metadata when available. When tarball inspection is enabled, npm-gate fetches the current and nearest previous version tarballs through the registry client, reuses the tarball cache, and compares their entry lists and package sizes. Patch or minor releases are flagged when package size grows at least 3x and by at least 100KB, or by at least 1MB regardless of ratio. Large file-count spikes in patch or minor releases also require review. Package.json-only lifecycle additions block. Patch or minor releases that add dependencies require review, and a newly added dependency with an install script or high-confidence typosquat signal blocks.
 
 Dependency delta analysis compares direct and transitive dependency closures. Package-lock paths are reported for direct and nested packages when the lockfile contains enough path metadata, and newly introduced transitive packages include a dependency path so hidden dependency injection is visible even when the top-level package is popular or has a legitimate maintainer.
 
@@ -103,6 +103,7 @@ Optional source verification is separate from npm provenance. It can verify conf
         "repository": "company/core",
         "tagTemplate": "v{version}",
         "commit": "expected-release-commit",
+        "packageJsonPath": "package.json",
         "required": true
       }
     ]
@@ -110,19 +111,19 @@ Optional source verification is separate from npm provenance. It can verify conf
 }
 ```
 
-Repository values may be `owner/repo`, `https://github.com/owner/repo`, or `.git` URLs. Required failures block in strict and emergency mode. Optional failures require review. Tests should use an injected verifier and must not depend on live GitHub access.
+Repository values may be `owner/repo`, `https://github.com/owner/repo`, or `.git` URLs. `packageJsonPath` defaults to `package.json`. When a source ref is available, npm-gate compares the published manifest with the configured source manifest for lifecycle scripts, dependency sections, `bin`, `main`, `exports`, `files`, and repository metadata. Required failures block in strict and emergency mode. Optional failures require review. Tests should use an injected verifier and must not depend on live GitHub access.
 
 ## Production CI Policy
 
 `npm-gate ci` forces production policy and strict exit behavior. It adds project-level findings for package-lock tarball hosts outside `approvedRegistryHosts`, package-lock integrity changes against an optional baseline, bounded transitive registry dependency inspection, direct registry tarball inspection, and dangerous GitHub Actions patterns such as `pull_request_target` plus untrusted checkout, cache use across privileged workflows, broad token permissions, and actions not pinned to full commit SHAs.
 
-Transitive dependency tarball inspection is opt-in with `--deep-tarballs`. This keeps normal CI runtime bounded while still allowing slower release audits to fetch and inspect transitive package artifacts.
+Transitive dependency tarball inspection is opt-in with `--deep-tarballs` or the clearer `npm-gate ci --release-audit` shortcut. This keeps normal CI runtime bounded while still allowing slower release and incident audits to fetch and inspect transitive package artifacts.
 
 Required intelligence sources fail closed in CI. `local` is satisfied by the local advisory file path even when no records exist. `osv` uses the OSV querybatch-compatible intelligence client when configured.
 
 ## Frontend Runtime Policy
 
-Bounded tarball samples are scanned for browser runtime risk: wallet provider access, clipboard mutation, transaction object mutation, DOM injection, fetch/XHR/WebSocket interception, CDN `latest` references, external scripts without SRI, and newly introduced obfuscated payloads. Strict mode blocks newly introduced wallet, clipboard, and transaction-manipulation behavior in dependency updates unless explicitly reviewed.
+Bounded tarball samples are scanned for browser runtime risk: wallet provider access, clipboard mutation, transaction object mutation, DOM injection, fetch/XHR/WebSocket interception, CDN `latest` references, external scripts without SRI, and newly introduced obfuscated payloads. Project source files are scanned for external script tags that use CDN `latest` or omit SRI, excluding dependency, build, and cache directories. Strict mode blocks newly introduced wallet, clipboard, transaction-manipulation, and project CDN `latest` behavior unless explicitly reviewed; missing SRI requires manual review and therefore fails strict exit semantics.
 
 ## Credential Exposure Policy
 
@@ -130,4 +131,4 @@ Credential exposure checks report categories only. They detect npm token environ
 
 ## Emergency Denylist Policy
 
-Emergency mode consumes only local config. It blocks configured package/version denylist entries in direct or transitive lockfile paths, reports affected dependency paths, and prints credential-rotation and CI-cleanup checklists. npm-gate does not pull live incident feeds.
+Emergency mode consumes only local config. It blocks configured package/version denylist entries in direct or transitive lockfile paths, reports affected dependency paths, and prints credential-rotation and CI-cleanup checklists. npm-gate does not pull live incident feeds. Import external incident data into `npm-gate-advisories.json` or `emergencyDenylist` after local review.

@@ -13,6 +13,10 @@ const credentialHarvestingPatterns: Array<[string, RegExp]> = [
   ],
   ['credential file probe', /(?:\.npmrc|\.ssh[\\/]|id_rsa|id_ed25519|\.aws[\\/]credentials)/i],
   ['cloud metadata probe', /(?:169\.254\.169\.254|metadata\.google\.internal)/i],
+  [
+    'secret file enumeration',
+    /\b(?:readFileSync|readFile|readdirSync|readdir|glob|fast-glob)\b[\s\S]{0,240}(?:\.npmrc|\.env|\.ssh|id_rsa|id_ed25519|\.aws|credentials|gcloud|kube[\\/]config)/i
+  ],
   ['secret scanner invocation', /\btrufflehog\b/i]
 ];
 
@@ -21,6 +25,7 @@ const installDownloaderPatterns: Array<[string, RegExp]> = [
   ['curl pipe execution', /\bcurl\b[\s\S]{0,240}\|\s*(?:bash|sh|node)\b/i],
   ['wget pipe execution', /\bwget\b[\s\S]{0,240}\|\s*(?:bash|sh|node)\b/i],
   ['powershell downloader', /\b(?:Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i],
+  ['node http downloader', /\b(?:fetch\s*\(|https?\.get\s*\(|https?\.request\s*\()/i],
   ['global npm install loader', /\bnpm\s+(?:install|i)\s+-g\b/i]
 ];
 
@@ -28,6 +33,7 @@ const networkExfilPattern =
   /\b(?:fetch\s*\(|https?\.request\s*\(|XMLHttpRequest\b|axios\.|request\s*\(|curl\b|wget\b)/i;
 const childProcessPattern =
   /\b(?:child_process|exec\s*\(|execFile\s*\(|spawn\s*\(|spawnSync\s*\()/i;
+const processEnvPattern = /\bprocess\.env\b/i;
 
 const obfuscationPatterns: Array<[string, RegExp]> = [
   ['eval execution', /\beval\s*\(/i],
@@ -165,6 +171,17 @@ export function analyzeTarballEntries(entries: TarballEntry[]): { signals: RiskS
         )
       );
     }
+    if (/\.(?:cjs|js|mjs)$/i.test(entry.path) && entry.size > 1_000_000) {
+      signals.push(
+        signal(
+          'large-javascript-payload',
+          25,
+          `Large JavaScript payload found: ${entry.path}`,
+          entry,
+          'medium'
+        )
+      );
+    }
 
     if (!entry.sample) continue;
     const credentialMatch = firstMatch(entry.sample, credentialHarvestingPatterns);
@@ -204,6 +221,19 @@ export function analyzeTarballEntries(entries: TarballEntry[]): { signals: RiskS
           entry,
           'high',
           'child_process plus network'
+        )
+      );
+    }
+
+    if (processEnvPattern.test(entry.sample) && networkExfilPattern.test(entry.sample)) {
+      signals.push(
+        contentSignal(
+          'process-env-network-exfil',
+          60,
+          `process.env with network exfiltration pattern found in tarball: ${entry.path}`,
+          entry,
+          'high',
+          'process.env plus network'
         )
       );
     }

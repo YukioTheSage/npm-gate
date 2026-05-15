@@ -1,9 +1,15 @@
 import { request } from 'node:https';
-import type { RiskSignal, SourceVerificationRule, SourceVerifier } from '../core/types.js';
+import type {
+  PackageManifest,
+  RiskSignal,
+  SourceVerificationRule,
+  SourceVerifier
+} from '../core/types.js';
 
 interface SourceVerificationInput {
   packageName: string;
   version: string;
+  currentManifest?: PackageManifest;
   rule: SourceVerificationRule;
   verifier: SourceVerifier;
 }
@@ -21,6 +27,27 @@ interface GitHubTagObject {
     sha?: string;
   };
 }
+
+interface GitHubContentObject {
+  type?: string;
+  encoding?: string;
+  content?: string;
+}
+
+const sourceManifestFields: Array<keyof PackageManifest> = [
+  'scripts',
+  'dependencies',
+  'devDependencies',
+  'peerDependencies',
+  'optionalDependencies',
+  'bundledDependencies',
+  'bundleDependencies',
+  'bin',
+  'main',
+  'exports',
+  'files',
+  'repository'
+];
 
 export function normalizeGitHubRepository(repository: string): string | undefined {
   const trimmed = repository.trim().replace(/\.git$/, '');
@@ -40,14 +67,15 @@ function sourceSignal(
   id: string,
   message: string,
   value: unknown,
-  required: boolean
+  required: boolean,
+  matchedSignals = [id]
 ): RiskSignal {
   return {
     id,
     score: required ? 70 : 35,
     severity: required ? 'high' : 'medium',
     riskCategory: 'artifact_diff_risk',
-    matchedSignals: [id],
+    matchedSignals,
     manualReview: !required,
     message,
     evidence: [{ type: 'source-verification', message, value }],
@@ -62,6 +90,85 @@ function sourceSignal(
 
 function tagFromTemplate(template: string | undefined, version: string): string | undefined {
   return template?.replaceAll('{version}', version);
+}
+
+function manifestValue(manifest: PackageManifest, field: keyof PackageManifest): string {
+  return JSON.stringify(manifest[field] ?? null);
+}
+
+async function sourceManifestSignals(input: {
+  packageName: string;
+  repository: string;
+  ref: string | undefined;
+  rule: SourceVerificationRule;
+  verifier: SourceVerifier;
+  currentManifest: PackageManifest | undefined;
+  required: boolean;
+}): Promise<RiskSignal[]> {
+  if (!input.currentManifest || !input.ref || !input.verifier.fetchFile) return [];
+  const currentManifest = input.currentManifest;
+  const packageJsonPath = input.rule.packageJsonPath ?? 'package.json';
+  const raw = await input.verifier.fetchFile(input.repository, input.ref, packageJsonPath);
+  if (!raw) {
+    return [
+      sourceSignal(
+        'source-manifest-unavailable',
+        'Configured source package manifest was not found',
+        {
+          package: input.packageName,
+          repository: input.repository,
+          ref: input.ref,
+          packageJsonPath
+        },
+        input.required
+      )
+    ];
+  }
+
+  let sourceManifest: PackageManifest;
+  try {
+    sourceManifest = JSON.parse(raw) as PackageManifest;
+  } catch (error) {
+    return [
+      sourceSignal(
+        'source-manifest-unavailable',
+        'Configured source package manifest is not valid JSON',
+        {
+          package: input.packageName,
+          repository: input.repository,
+          ref: input.ref,
+          packageJsonPath,
+          error: error instanceof Error ? error.message : String(error)
+        },
+        input.required
+      )
+    ];
+  }
+
+  const mismatches = sourceManifestFields
+    .filter((field) => manifestValue(sourceManifest, field) !== manifestValue(currentManifest, field))
+    .map((field) => ({
+      field,
+      expected: sourceManifest[field],
+      actual: currentManifest[field]
+    }));
+
+  if (mismatches.length === 0) return [];
+  return [
+    sourceSignal(
+      'source-manifest-mismatch',
+      'Published package manifest does not match configured source manifest',
+      {
+        package: input.packageName,
+        repository: input.repository,
+        ref: input.ref,
+        packageJsonPath,
+        mismatches
+      },
+      input.required,
+      mismatches.map((mismatch) => mismatch.field)
+    )
+  ];
 }
 
 export async function sourceVerificationSignals(
@@ -124,7 +231,16 @@ export async function sourceVerificationSignals(
       }
     }
 
-    return [];
+    const sourceRef = input.rule.commit ?? tagCommit ?? tag;
+    return sourceManifestSignals({
+      packageName: input.packageName,
+      repository,
+      ref: sourceRef,
+      rule: input.rule,
+      verifier: input.verifier,
+      currentManifest: input.currentManifest,
+      required
+    });
   } catch (error) {
     return [
       sourceSignal(
@@ -158,6 +274,22 @@ export class GitHubSourceVerifier implements SourceVerifier {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  async fetchFile(repository: string, ref: string, path: string): Promise<string | undefined> {
+    try {
+      const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+      const file = await githubJson<GitHubContentObject>(
+        `/repos/${repository}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`
+      );
+      if (file.type !== 'file' || !file.content) return undefined;
+      if (file.encoding === 'base64') {
+        return Buffer.from(file.content.replace(/\s/g, ''), 'base64').toString('utf8');
+      }
+      return file.content;
+    } catch {
+      return undefined;
     }
   }
 }

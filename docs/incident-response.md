@@ -45,9 +45,30 @@ Then rescan lockfiles and workflow configuration:
 
 ```sh
 npm-gate emergency --json > npm-gate-emergency-report.json
+npm-gate ci --release-audit --json > npm-gate-release-audit-report.json
 ```
 
-The report lists affected direct and transitive packages, affected versions, dependency paths when available, and block decisions. The console output also prints credential-rotation and CI-cleanup checklists.
+The emergency report lists affected direct and transitive packages, affected versions, dependency paths when available, and block decisions. The release-audit report also performs deep transitive tarball inspection so hidden dependency payloads and artifact deltas are visible before a release resumes. The console output also prints credential-rotation and CI-cleanup checklists.
+
+## Local Advisory Feed
+
+npm-gate does not pull live incident feeds. Convert reviewed external intelligence into `npm-gate-advisories.json` at the repository root:
+
+```json
+{
+  "packages": [
+    {
+      "name": "compromised-package",
+      "versions": ["1.2.3", "1.2.4"],
+      "type": "malicious",
+      "severity": "critical",
+      "summary": "Confirmed malicious publish SEC-2026-001"
+    }
+  ]
+}
+```
+
+Keep advisory records specific to affected package names and versions. Malicious records block matching versions; vulnerability records remain reviewable according to severity and policy mode.
 
 ## Credential Rotation Checklist
 
@@ -64,4 +85,5 @@ The report lists affected direct and transitive packages, affected versions, dep
 - Check release workflows for new `pull_request_target`, `workflow_run`, cache, and OIDC trust-boundary changes.
 - Inspect release logs for unexpected `npm publish`, token minting, downloader, or lifecycle-script execution.
 - Check npm package ownership, maintainer additions, access tokens, and unauthorized publishes.
+- Check application source for CDN `@latest` scripts and external script tags without SRI.
 - Rebuild release artifacts from a clean runner with lifecycle scripts disabled until the package set is reviewed.

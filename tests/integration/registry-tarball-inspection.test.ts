@@ -470,7 +470,7 @@ describe('registry tarball inspection', () => {
         version: '1.0.1',
         repository: { type: 'git', url: 'https://example.test/artifact-size.git' }
       },
-      { 'big.dat': Buffer.alloc(80_000, 1) }
+      { 'big.dat': Buffer.alloc(151_000, 1) }
     );
     const previousBuffer = await packDirectory(cwd, previousSource, 'artifact-size-1.0.0.tgz');
     const currentBuffer = await packDirectory(cwd, currentSource, 'artifact-size-1.0.1.tgz');

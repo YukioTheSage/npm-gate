@@ -103,7 +103,9 @@ export function artifactDiffSignals(input: ArtifactDiffInput): RiskSignal[] {
     patchOrMinor &&
     input.previousSize &&
     input.currentSize &&
-    input.currentSize > Math.max(input.previousSize * 10, input.previousSize + 50_000)
+    ((input.currentSize >= input.previousSize * 3 &&
+      input.currentSize - input.previousSize >= 100_000) ||
+      input.currentSize - input.previousSize >= 1_000_000)
   ) {
     signals.push(
       signal(
@@ -114,6 +116,29 @@ export function artifactDiffSignals(input: ArtifactDiffInput): RiskSignal[] {
         {
           previous: input.previousSize,
           current: input.currentSize,
+          package: manifestIdentity(current)
+        },
+        true
+      )
+    );
+  }
+
+  if (
+    patchOrMinor &&
+    input.previousEntries &&
+    input.currentEntries &&
+    input.currentEntries.length >= input.previousEntries.length * 3 &&
+    input.currentEntries.length - input.previousEntries.length >= 20
+  ) {
+    signals.push(
+      signal(
+        'suspicious-package-file-count-increase',
+        25,
+        'medium',
+        'Patch or minor release has a suspicious package file-count increase',
+        {
+          previous: input.previousEntries.length,
+          current: input.currentEntries.length,
           package: manifestIdentity(current)
         },
         true

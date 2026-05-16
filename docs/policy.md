@@ -12,6 +12,9 @@ The default policy balances local developer velocity with CI enforcement.
 | `blockGitDependencies`                       | `true`                                          |
 | `warnGitDependencies`                        | `true` schema default; local git findings warn  |
 | `requireProvenanceForHighImpactPackages`     | `false`                                         |
+| `requireTrustedPublishingForHighImpactPackages` | `false`; `true` in production profile        |
+| `verifyRegistrySignatures`                   | `false`                                         |
+| `requireCryptographicSignatureVerification`  | `false`                                         |
 | `warnMissingProvenanceWhenPreviouslyPresent` | `true` schema default; not separately consulted |
 | `warnMissingRegistrySignature`               | `true` when signature data is available         |
 | `blockNewPackageNamesInCI`                   | `true` unless allowlisted                       |
@@ -24,8 +27,10 @@ The default policy balances local developer velocity with CI enforcement.
 | `disallowOverridesInCI`                      | `true`                                          |
 | `approvedRegistryHosts`                      | `["registry.npmjs.org"]`                        |
 | `requiredIntelligenceSources`                | `[]`                                            |
+| `signedIncidentFeeds`                        | `[]`                                            |
 | `requireTarballInspection`                   | `false`                                         |
 | `requireIntegrityMatch`                      | `false`                                         |
+| `fullTextTarballScanning`                    | `false`; `true` in production profile          |
 | `inspectTransitiveDependencies`              | `false`                                         |
 | `maxDependencyClosurePackages`               | `250`                                           |
 | `blockCredentialHarvestingPatterns`          | `true`; hard-blocks in CI/production            |
@@ -33,6 +38,7 @@ The default policy balances local developer velocity with CI enforcement.
 | `requireWorkflowShaPinning`                  | `false`                                         |
 | `forbidReleaseCaches`                        | `false`                                         |
 | `expectedProvenance`                         | `[]`                                            |
+| `trustedPublishing`                          | `[]`                                            |
 | `sourceVerification`                         | `{ "enabled": false, "rules": [] }`             |
 | `emergencyDenylist`                          | `[]`                                            |
 
@@ -54,6 +60,8 @@ Runtime modes:
 - `block`: turns warning decisions into block decisions.
 - `ci`: applies CI semantics and selects strict policy mode unless explicitly overridden.
 - `off`: disables enforcement decisions. For `install` and `add`, it delegates directly unless `--dry-run` or `--no-execute` is set.
+
+Sandbox execution is separate from runtime mode. `--sandbox-plan` remains static and non-executing. `--sandbox-execute` runs the selected package manager only after policy allows the target, removes common publish tokens, GitHub tokens, cloud credentials, and SSH agent variables, uses an isolated temporary home, and appends `--ignore-scripts`. It reports platform limitations before delegation; npm-gate does not enforce network allowlisting or OS-level containment in this mode.
 
 Every finding includes package or workflow target, version when applicable, decision, score, severity, reasons, evidence, remediation, and whether an exception can override the finding. Newer reports also include additive fields such as `riskCategory`, `matchedSignals`, `evidenceSummary`, `recommendedFix`, `policyMode`, `allowlist`, and `dependencyPath`. Existing JSON consumers can keep using the original fields.
 
@@ -88,6 +96,8 @@ Package allowlists are not lifecycle execution allowlists. The script allowlist 
 
 Artifact diffing compares package manifests, dependency additions and removals, script additions or changes, binary and suspicious file additions, package-size deltas, file-count deltas, repository metadata changes, and tarball/source mismatch metadata when available. When tarball inspection is enabled, npm-gate fetches the current and nearest previous version tarballs through the registry client, reuses the tarball cache, and compares their entry lists and package sizes. Patch or minor releases are flagged when package size grows at least 3x and by at least 100KB, or by at least 1MB regardless of ratio. Large file-count spikes in patch or minor releases also require review. Package.json-only lifecycle additions block. Patch or minor releases that add dependencies require review, and a newly added dependency with an install script or high-confidence typosquat signal blocks.
 
+Tarball content scanning records a bounded 16 KiB sample for eligible text entries by default. When `fullTextTarballScanning` is enabled, eligible text entries up to the configured internal cap are scanned in full so patterns after the initial sample can still be detected. Executable text entries are also checked for invisible Unicode controls, including bidirectional controls, zero-width characters, and variation selectors that can hide source-level payloads from visual review.
+
 Dependency delta analysis compares direct and transitive dependency closures. Package-lock paths are reported for direct and nested packages when the lockfile contains enough path metadata, and newly introduced transitive packages include a dependency path so hidden dependency injection is visible even when the top-level package is popular or has a legitimate maintainer.
 
 ## Typosquat And Dependency Confusion Policy
@@ -97,6 +107,25 @@ Name-confusion checks compare packages to configured `protectedPackageNames`. Si
 ## Provenance Policy
 
 Provenance proves publish path, not package safety. Expected repository, workflow, ref, and commit subject can be configured per package, and mismatches block under strict policy. Provenance and trusted publishing never suppress lifecycle-script, artifact-diff, dependency-delta, typosquat, frontend runtime, or CI trust-boundary findings.
+
+When `requireTrustedPublishingForHighImpactPackages` is enabled, packages listed in `highImpactPackageNames` must expose trusted-publishing evidence in provenance metadata. `trustedPublishing` can pin expected repository, workflow, and issuer values per package. Missing or mismatched trusted-publishing evidence emits provenance-risk signals and fails strict, production, and emergency gates.
+
+```json
+{
+  "highImpactPackageNames": ["@company/core"],
+  "requireTrustedPublishingForHighImpactPackages": true,
+  "trustedPublishing": [
+    {
+      "package": "@company/core",
+      "repository": "company/core",
+      "workflow": ".github/workflows/publish.yml",
+      "issuer": "https://token.actions.githubusercontent.com"
+    }
+  ]
+}
+```
+
+`verifyRegistrySignatures` enables cryptographic verification through the configured verifier. The default verifier shells out to `npm audit signatures --json` and caches the result per project directory. `requireCryptographicSignatureVerification` makes unavailable, missing, unverified, or invalid verification evidence a high-severity provenance-risk signal. Both settings default to `false`, including in the production profile, so release projects can opt in only after their CI image has a reviewed npm CLI and lockfile shape.
 
 Optional source verification is separate from npm provenance. It can verify configured GitHub repository tags and commits for selected packages:
 
@@ -122,11 +151,13 @@ Repository values may be `owner/repo`, `https://github.com/owner/repo`, or `.git
 
 ## Production CI Policy
 
-`npm-gate ci` forces production policy and strict exit behavior. It adds project-level findings for package-lock tarball hosts outside `approvedRegistryHosts`, package-lock integrity changes against an optional baseline, bounded transitive registry dependency inspection, direct registry tarball inspection, and dangerous GitHub Actions patterns such as `pull_request_target` plus untrusted checkout, cache use across privileged workflows, broad token permissions, and actions not pinned to full commit SHAs.
+`npm-gate ci` forces production policy and strict exit behavior. It adds project-level findings for package-lock, pnpm-lock, and Yarn classic lockfile tarball hosts outside `approvedRegistryHosts`; lockfile integrity changes against optional baselines; bounded transitive registry dependency inspection; direct registry tarball inspection; and dangerous GitHub Actions patterns such as `pull_request_target` plus untrusted checkout, cache use across privileged workflows, broad token permissions, and actions not pinned to full commit SHAs.
 
 Transitive dependency tarball inspection is opt-in with `--deep-tarballs` or the clearer `npm-gate ci --release-audit` shortcut. This keeps normal CI runtime bounded while still allowing slower release and incident audits to fetch and inspect transitive package artifacts.
 
-Configured OSV intelligence fails closed when `osv` is required and unavailable. `local` is treated as the built-in local advisory feed and is satisfied even when `npm-gate-advisories.json` is absent or contains no records. `npm-audit` advisories are supplied by the `npm-gate audit` command; the current `requiredIntelligenceSources` enforcement path does not launch `npm audit` on its own.
+The npm-gate release process also runs `pnpm run release:verify-deps` before packing. That check requires `npm-shrinkwrap.json` when runtime dependencies exist so the published CLI has an exact dependency-tree strategy. See [release hardening](release-hardening.md).
+
+Configured OSV intelligence fails closed when `osv` is required and unavailable. `local` is treated as the built-in local advisory feed and is satisfied even when `npm-gate-advisories.json` is absent or contains no records. `signed-feed` requires at least one configured `signedIncidentFeeds` entry whose Ed25519 signature verifies before its advisories are trusted; if `signed-feed` is required and no valid feed can be loaded, CI fails closed with `required-intelligence-unavailable`. `npm-audit` advisories are supplied by the `npm-gate audit` command; the current `requiredIntelligenceSources` enforcement path does not launch `npm audit` on its own.
 
 ## Frontend Runtime Policy
 
@@ -138,4 +169,4 @@ Credential exposure checks report categories only. They detect npm token environ
 
 ## Emergency Denylist Policy
 
-Emergency mode consumes only local config. It blocks configured package/version denylist entries in direct or transitive lockfile paths, reports affected dependency paths, and prints credential-rotation and CI-cleanup checklists. npm-gate does not pull live incident feeds. Import external incident data into `npm-gate-advisories.json` or `emergencyDenylist` after local review.
+Emergency mode consumes only local config. It blocks configured package/version denylist entries in direct or transitive lockfile paths, reports affected dependency paths, and prints credential-rotation and CI-cleanup checklists. npm-gate does not pull live incident feeds. Import external incident data into `npm-gate-advisories.json`, `signedIncidentFeeds`, or `emergencyDenylist` after local review.

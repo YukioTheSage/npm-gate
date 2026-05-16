@@ -66,6 +66,14 @@ npm-gate scan --tarballs --json
 npm-gate install ./pkg.tgz --sandbox-plan
 ```
 
+## Execute With a Scrubbed Install Environment
+
+```sh
+npm-gate install axios --sandbox-execute
+```
+
+Sandbox execution still runs the package manager, but only after policy allows the target. It removes common publish tokens, GitHub tokens, cloud credentials, and SSH agent variables; uses an isolated temporary home; and appends `--ignore-scripts`. npm-gate reports that network allowlisting is not enforced by this mode.
+
 ## Emergency Lockfile Rescan
 
 ```sh
@@ -159,6 +167,36 @@ The original JSON fields remain present. The additional fields are additive for 
 ```
 
 Source verification is optional and package-scoped. When enabled, the default verifier queries GitHub tag, commit, and configured `package.json` metadata; it does not make provenance or trusted publishing a safety bypass.
+
+## Configure Trusted Publishing Expectations
+
+```json
+{
+  "highImpactPackageNames": ["@company/core"],
+  "requireTrustedPublishingForHighImpactPackages": true,
+  "trustedPublishing": [
+    {
+      "package": "@company/core",
+      "repository": "company/core",
+      "workflow": ".github/workflows/publish.yml",
+      "issuer": "https://token.actions.githubusercontent.com"
+    }
+  ]
+}
+```
+
+Trusted publishing is treated as publish-path evidence. Missing or mismatched evidence fails strict and production gates for configured high-impact packages, but it does not bypass artifact, lifecycle script, dependency, frontend runtime, or CI trust-boundary checks.
+
+## Require Cryptographic Signature Verification
+
+```json
+{
+  "verifyRegistrySignatures": true,
+  "requireCryptographicSignatureVerification": true
+}
+```
+
+The default verifier runs `npm audit signatures --json` when verification is explicitly enabled. Required verification failures produce high-severity provenance-risk findings; verified signatures and attestations never suppress other package or workflow risks.
 
 ## Generate Enriched SARIF
 

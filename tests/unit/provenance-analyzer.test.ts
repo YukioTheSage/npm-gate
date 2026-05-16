@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { expectedProvenanceSignals } from '../../src/analyzers/provenance-analyzer.js';
+import {
+  expectedProvenanceSignals,
+  trustedPublishingSignals
+} from '../../src/analyzers/provenance-analyzer.js';
 
 describe('provenance analyzer', () => {
   test('treats expected provenance as publish-path evidence and flags mismatches', () => {
@@ -49,5 +52,46 @@ describe('provenance analyzer', () => {
     );
 
     expect(signals).toEqual([]);
+  });
+
+  test('flags missing trusted publishing for required high impact package', () => {
+    const signals = trustedPublishingSignals({
+      manifest: { name: '@company/core', version: '1.0.0', dist: {} },
+      packageName: '@company/core',
+      required: true
+    });
+
+    expect(signals).toEqual([
+      expect.objectContaining({
+        id: 'missing-trusted-publishing',
+        severity: 'high'
+      })
+    ]);
+  });
+
+  test('flags trusted publishing metadata mismatches', () => {
+    const signals = trustedPublishingSignals({
+      manifest: {
+        name: '@company/core',
+        version: '1.0.0',
+        dist: {
+          provenance: {
+            repository: 'company/core',
+            workflow: '.github/workflows/release.yml'
+          }
+        }
+      },
+      packageName: '@company/core',
+      required: true,
+      expected: {
+        package: '@company/core',
+        repository: 'company/core',
+        workflow: '.github/workflows/publish.yml'
+      }
+    });
+
+    expect(signals.map((signal) => signal.id)).toContain(
+      'trusted-publishing-source-mismatch'
+    );
   });
 });

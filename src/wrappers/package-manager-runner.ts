@@ -11,6 +11,10 @@ export interface ResolvePackageManagerInput {
   requested?: string;
 }
 
+export interface RunPackageManagerOptions {
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
+}
+
 function parsePackageManager(value: string | undefined): PackageManager | undefined {
   if (!value) return undefined;
   if (value === 'npm' || value === 'pnpm') return value;
@@ -32,11 +36,13 @@ export async function resolvePackageManager(
 export async function runPackageManager(
   packageManager: PackageManager,
   args: string[],
-  cwd: string
+  cwd: string,
+  options: RunPackageManagerOptions = {}
 ): Promise<number> {
+  const env = options.env ?? process.env;
   let resolved;
   try {
-    resolved = await resolveCommandForSpawn(packageManager, args, { env: process.env });
+    resolved = await resolveCommandForSpawn(packageManager, args, { env });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${redactSecrets(message)}\n`);
@@ -48,7 +54,7 @@ export async function runPackageManager(
       cwd,
       stdio: 'inherit',
       shell: false,
-      env: { ...process.env }
+      env: { ...env }
     });
     child.on('error', (error) => {
       process.stderr.write(`${redactSecrets(error.message)}\n`);
@@ -65,5 +71,5 @@ export async function runDefaultPackageManager(
   requested?: string
 ): Promise<number> {
   const packageManager = await resolvePackageManager({ cwd, env, requested });
-  return runPackageManager(packageManager, args, cwd);
+  return runPackageManager(packageManager, args, cwd, { env });
 }

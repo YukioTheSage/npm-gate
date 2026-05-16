@@ -1,9 +1,11 @@
+import type { SignatureVerifier } from '../verification/signature-verifier.js';
+
 export type RuntimeMode = 'off' | 'warn' | 'block' | 'ci';
 export type DecisionKind = 'allow' | 'warn' | 'block' | 'manual_review';
 export type Severity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 export type PolicyProfile = 'default' | 'production' | 'audit-only';
 export type PolicyMode = 'balanced' | 'strict' | 'emergency';
-export type IntelligenceSource = 'npm-audit' | 'osv' | 'local';
+export type IntelligenceSource = 'npm-audit' | 'osv' | 'local' | 'signed-feed';
 export type RiskCategory =
   | 'lifecycle_script_risk'
   | 'dependency_delta_risk'
@@ -130,6 +132,9 @@ export interface PolicyConfig {
   blockGitDependencies: boolean;
   warnGitDependencies: boolean;
   requireProvenanceForHighImpactPackages: boolean;
+  requireTrustedPublishingForHighImpactPackages: boolean;
+  verifyRegistrySignatures: boolean;
+  requireCryptographicSignatureVerification: boolean;
   warnMissingProvenanceWhenPreviouslyPresent: boolean;
   warnMissingRegistrySignature: boolean;
   blockNewPackageNamesInCI: boolean;
@@ -143,9 +148,11 @@ export interface PolicyConfig {
   protectedPackageNames: string[];
   highImpactPackageNames: string[];
   requiredIntelligenceSources: IntelligenceSource[];
+  signedIncidentFeeds: SignedIncidentFeedConfig[];
   approvedRegistryHosts: string[];
   requireTarballInspection: boolean;
   requireIntegrityMatch: boolean;
+  fullTextTarballScanning: boolean;
   inspectTransitiveDependencies: boolean;
   maxDependencyClosurePackages: number;
   blockCredentialHarvestingPatterns: boolean;
@@ -154,6 +161,7 @@ export interface PolicyConfig {
   forbidReleaseCaches: boolean;
   emergencyDenylist: EmergencyDenylistEntry[];
   expectedProvenance: ExpectedProvenanceRule[];
+  trustedPublishing: TrustedPublishingRule[];
   sourceVerification: SourceVerificationConfig;
 }
 
@@ -169,6 +177,18 @@ export interface ExpectedProvenanceRule {
   workflow?: string;
   ref?: string;
   commitSubject?: string;
+}
+
+export interface TrustedPublishingRule {
+  package: string;
+  repository?: string;
+  workflow?: string;
+  issuer?: string;
+}
+
+export interface SignedIncidentFeedConfig {
+  path: string;
+  publicKeyPem: string;
 }
 
 export interface SourceVerificationConfig {
@@ -262,8 +282,12 @@ export interface ScanProjectOptions {
   deepTarballInspection?: boolean;
   maxConcurrentEvaluations?: number;
   advisories?: AdvisoryInput[];
+  signedIncidentFeeds?: SignedIncidentFeedConfig[];
   previousPackageLockPath?: string;
+  previousPnpmLockPath?: string;
+  previousYarnLockPath?: string;
   sourceVerifier?: SourceVerifier;
+  signatureVerifier?: SignatureVerifier;
 }
 
 export interface LifecycleScript {
@@ -275,4 +299,5 @@ export interface TarballEntry {
   path: string;
   size: number;
   sample?: string;
+  fullText?: string;
 }

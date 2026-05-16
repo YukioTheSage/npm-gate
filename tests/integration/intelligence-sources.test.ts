@@ -1,3 +1,4 @@
+import { generateKeyPairSync, sign } from 'node:crypto';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -99,6 +100,91 @@ describe('intelligence sources', () => {
           package: 'intelligence:osv',
           decision: 'block',
           reasons: ['Required intelligence source is unavailable: osv']
+        })
+      ])
+    );
+  });
+
+  test('signed incident feed advisories block matching packages', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'npm-gate-signed-intel-'));
+    await writeFile(
+      join(cwd, 'package.json'),
+      JSON.stringify({ dependencies: { 'compromised-package': '1.0.0' } })
+    );
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const payload = JSON.stringify({
+      packages: [
+        {
+          name: 'compromised-package',
+          versions: ['1.0.0'],
+          type: 'malicious',
+          severity: 'critical',
+          summary: 'Signed incident fixture'
+        }
+      ]
+    });
+    const feedPath = join(cwd, 'feed.json');
+    await writeFile(
+      feedPath,
+      JSON.stringify({
+        payload: JSON.parse(payload),
+        signature: sign(null, Buffer.from(payload), privateKey).toString('base64')
+      })
+    );
+
+    const report = await scanProject({
+      cwd,
+      registry,
+      env: { NPM_GATE_MODE: 'ci' },
+      now: new Date('2026-05-14T00:00:00.000Z'),
+      signedIncidentFeeds: [
+        {
+          path: feedPath,
+          publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }).toString()
+        }
+      ]
+    });
+
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          package: 'compromised-package',
+          decision: 'block',
+          reasons: expect.arrayContaining([
+            'malicious advisory matched: Signed incident fixture'
+          ])
+        })
+      ])
+    );
+  });
+
+  test('required signed incident feed fails closed when unavailable', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'npm-gate-required-signed-intel-'));
+    await writeFile(
+      join(cwd, 'package.json'),
+      JSON.stringify({ dependencies: { reviewed: '1.0.0' } })
+    );
+    await writeFile(
+      join(cwd, 'npm-gate.config.json'),
+      JSON.stringify({
+        requiredIntelligenceSources: ['signed-feed'],
+        signedIncidentFeeds: [{ path: join(cwd, 'missing-feed.json'), publicKeyPem: 'bad-key' }]
+      })
+    );
+
+    const report = await scanProject({
+      cwd,
+      registry,
+      env: { NPM_GATE_MODE: 'ci' },
+      now: new Date('2026-05-14T00:00:00.000Z')
+    });
+
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          package: 'intelligence:signed-feed',
+          decision: 'block',
+          reasons: ['Required intelligence source is unavailable: signed-feed']
         })
       ])
     );

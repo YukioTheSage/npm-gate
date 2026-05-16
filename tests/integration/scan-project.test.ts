@@ -159,6 +159,114 @@ describe('scanProject', () => {
     });
   });
 
+  test('flags missing trusted publishing evidence for configured high-impact packages', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'npm-gate-trusted-publishing-scan-'));
+    await writeFile(
+      join(cwd, 'package.json'),
+      JSON.stringify({ dependencies: { '@company/core': '1.0.0' } })
+    );
+    await writeFile(
+      join(cwd, 'npm-gate.config.json'),
+      JSON.stringify({
+        highImpactPackageNames: ['@company/core'],
+        requireTrustedPublishingForHighImpactPackages: true
+      })
+    );
+    const trustedRegistry: RegistryClient = {
+      async getPackageMetadata(name: string) {
+        return {
+          name,
+          versions: {
+            '1.0.0': {
+              name,
+              version: '1.0.0',
+              dist: { provenance: true }
+            }
+          },
+          time: { '1.0.0': '2026-01-01T00:00:00.000Z' },
+          'dist-tags': { latest: '1.0.0' }
+        };
+      },
+      async resolveVersion(_name: string, range: string | undefined) {
+        return range ?? '1.0.0';
+      }
+    };
+
+    const report = await scanProject({
+      cwd,
+      registry: trustedRegistry,
+      env: { NPM_GATE_MODE: 'ci' },
+      now: new Date('2026-05-14T00:00:00.000Z')
+    });
+
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          package: '@company/core',
+          reasons: expect.arrayContaining([
+            'Trusted publishing evidence is missing for @company/core'
+          ])
+        })
+      ])
+    );
+  });
+
+  test('uses injected cryptographic signature verifier when required', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'npm-gate-signature-verification-'));
+    await writeFile(
+      join(cwd, 'package.json'),
+      JSON.stringify({ dependencies: { 'left-pad': '1.3.0' } })
+    );
+    await writeFile(
+      join(cwd, 'npm-gate.config.json'),
+      JSON.stringify({
+        requireCryptographicSignatureVerification: true
+      })
+    );
+    const signatureRegistry: RegistryClient = {
+      async getPackageMetadata(name: string) {
+        return {
+          name,
+          versions: {
+            '1.3.0': {
+              name,
+              version: '1.3.0',
+              dist: { signatures: [{ keyid: 'fixture' }] }
+            }
+          },
+          time: { '1.3.0': '2026-01-01T00:00:00.000Z' },
+          'dist-tags': { latest: '1.3.0' }
+        };
+      },
+      async resolveVersion(_name: string, range: string | undefined) {
+        return range ?? '1.3.0';
+      }
+    };
+
+    const report = await scanProject({
+      cwd,
+      registry: signatureRegistry,
+      env: { NPM_GATE_MODE: 'ci' },
+      signatureVerifier: {
+        async verify() {
+          return { status: 'unavailable', message: 'offline fixture' };
+        }
+      },
+      now: new Date('2026-05-14T00:00:00.000Z')
+    });
+
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          package: 'left-pad',
+          reasons: expect.arrayContaining([
+            'Cryptographic signature verification unavailable for left-pad@1.3.0'
+          ])
+        })
+      ])
+    );
+  });
+
   test('emergency policy mode blocks denylisted direct dependencies', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'npm-gate-emergency-denylist-'));
     await writeFile(

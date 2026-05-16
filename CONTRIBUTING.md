@@ -3,14 +3,14 @@
 ## Development Setup
 
 ```sh
-pnpm install
+pnpm install --ignore-scripts
 pnpm typecheck
 pnpm lint
 pnpm test
 pnpm build
 ```
 
-Use Node.js 20.17.0 or newer. Keep dependencies small, auditable, and directly relevant to npm package analysis.
+Use Node.js 20.17.0 or newer. Keep dependency bootstrap scripts disabled unless a maintainer explicitly approves running them. Keep dependencies small, auditable, and directly relevant to npm package analysis.
 
 ## Contribution Standards
 

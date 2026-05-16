@@ -43,7 +43,7 @@ npm-gate performs static analysis and policy enforcement. It does not execute pa
 
 ## Security Principles
 
-- Resolve safely, inspect artifacts, evaluate release path, block risky execution, sandbox only approved execution, protect credentials, and continuously rescan lockfiles and CI.
+- Resolve safely, inspect artifacts, evaluate release path, block risky execution, produce non-executing sandbox plans for future isolated analysis, protect credentials, and continuously rescan lockfiles and CI.
 - Do not treat package popularity, legitimate maintainer identity, npm provenance, trusted publishing, semver patch status, or a valid registry publish as sufficient evidence of safety.
 - Provenance proves publish path, not package safety.
 - Hidden transitive dependencies must be evaluated and reported with dependency paths when available.

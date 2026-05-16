@@ -7,6 +7,7 @@ NPM_GATE_MODE=ci npm-gate scan --production
 NPM_GATE_POLICY_MODE=strict npm-gate scan --production --json
 NPM_GATE_MODE=ci npm-gate ci --json
 NPM_GATE_MODE=ci npm-gate ci --release-audit --json
+NPM_GATE_MODE=ci npm-gate ci --previous-package-lock ../baseline/package-lock.json --json
 ```
 
 Default CI scans keep transitive analysis bounded for predictable runtime. Use `npm-gate ci --release-audit` for slower release or incident audits that should also fetch and inspect transitive dependency tarballs. The lower-level `--deep-tarballs` flag remains available for scripts that only need to opt into deep artifact inspection.
@@ -24,6 +25,8 @@ For one-off CI usage, pin an approved version with
 `pnpm dlx npm-gate@<approved-version> ci --json`.
 
 The repository CI also runs `pnpm smoke:pack` after build. That smoke packs the CLI, installs the packed tarball into a temporary project, and verifies local plus configured-registry remote tarball scans without relying on live package fixtures.
+
+`--previous-package-lock <path>` compares current `package-lock.json` integrity values against a baseline. The same baseline can be provided with `NPM_GATE_BASE_PACKAGE_LOCK`.
 
 ## Local Incident Intelligence
 
@@ -58,16 +61,14 @@ The CI scanner checks `.github/workflows/*.yml` and `.github/workflows/*.yaml` f
 
 - `pull_request_target` workflows that checkout or execute untrusted PR code.
 - `workflow_run` workflows that consume artifacts from untrusted workflows.
-- Release jobs with `id-token: write` after cache restore or risky install/build/test steps.
-- Package-manager caches shared between PR and release jobs.
+- OIDC token minting combined with package-manager cache restore.
+- Package-manager cache use in privileged workflows or when release caches are forbidden.
 - Broad permissions such as `contents: write`, `packages: write`, `actions: write`, or `id-token: write`.
-- Third-party actions not pinned to full commit SHA.
-- Secrets available to build/test jobs.
+- External actions not pinned to full commit SHA.
 - Self-hosted runners on untrusted PR workflows.
-- `npm publish` after risky install or cache restore.
-- Release jobs running `npm install` or `npm ci` without `--ignore-scripts`.
+- `npm publish` or `pnpm publish` after `npm`, `pnpm`, or `yarn` install commands that omit `--ignore-scripts`.
 
-Strict mode blocks unsafe OIDC, cache, and `pull_request_target` combinations. Emergency mode blocks release workflows with shared cache plus `id-token: write`.
+Strict exit semantics fail emitted workflow warnings and hard-block unsafe OIDC, cache, `workflow_run` artifact, publish-after-risky-install, overprivileged token, and `pull_request_target` combinations. Emergency mode blocks every emitted workflow risk.
 
 ## Safer Install Context
 

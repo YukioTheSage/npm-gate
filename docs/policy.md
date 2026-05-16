@@ -2,51 +2,58 @@
 
 The default policy balances local developer velocity with CI enforcement.
 
-| Setting                                      | Default                                               |
-| -------------------------------------------- | ----------------------------------------------------- |
-| `profile`                                    | `default`                                             |
-| `policyMode`                                 | `balanced`                                            |
-| `minimumReleaseAgeHours`                     | `72`                                                  |
-| `blockLifecycleScripts`                      | `true` for first-seen packages or new lifecycle hooks |
-| `warnLifecycleScripts`                       | `true` for known packages                             |
-| `blockGitDependencies`                       | `true` in CI                                          |
-| `warnGitDependencies`                        | `true` locally                                        |
-| `requireProvenanceForHighImpactPackages`     | `false`                                               |
-| `warnMissingProvenanceWhenPreviouslyPresent` | `true`                                                |
-| `warnMissingRegistrySignature`               | `true` when signature data is available               |
-| `blockNewPackageNamesInCI`                   | `true` unless allowlisted                             |
-| `blockSuspiciousNameConfusion`               | `true`                                                |
-| `blockKnownMaliciousAdvisories`              | `true`                                                |
-| `warnUnknownPackages`                        | `true`                                                |
-| `maxRiskScoreAllowed`                        | `70`                                                  |
-| `maxRiskScoreWarn`                           | `40`                                                  |
-| `allowOverridesWithJustification`            | `true` locally                                        |
-| `disallowOverridesInCI`                      | `true`                                                |
-| `approvedRegistryHosts`                      | `["registry.npmjs.org"]`                              |
-| `requiredIntelligenceSources`                | `[]`                                                  |
-| `requireTarballInspection`                   | `false`                                               |
-| `requireIntegrityMatch`                      | `false`                                               |
-| `inspectTransitiveDependencies`              | `false`                                               |
-| `maxDependencyClosurePackages`               | `250`                                                 |
-| `blockCredentialHarvestingPatterns`          | `true` in CI/production                              |
-| `blockInstallDownloaders`                    | `true` in CI/production                              |
-| `requireWorkflowShaPinning`                  | `false`                                               |
-| `forbidReleaseCaches`                        | `false`                                               |
-| `expectedProvenance`                         | `[]`                                                  |
-| `sourceVerification`                         | `{ "enabled": false, "rules": [] }`                   |
-| `emergencyDenylist`                          | `[]`                                                  |
+| Setting                                      | Default                                         |
+| -------------------------------------------- | ----------------------------------------------- |
+| `profile`                                    | `default`                                       |
+| `policyMode`                                 | `balanced`                                      |
+| `minimumReleaseAgeHours`                     | `72`                                            |
+| `blockLifecycleScripts`                      | `true`                                          |
+| `warnLifecycleScripts`                       | `true` schema default; not separately consulted |
+| `blockGitDependencies`                       | `true`                                          |
+| `warnGitDependencies`                        | `true` schema default; local git findings warn  |
+| `requireProvenanceForHighImpactPackages`     | `false`                                         |
+| `warnMissingProvenanceWhenPreviouslyPresent` | `true` schema default; not separately consulted |
+| `warnMissingRegistrySignature`               | `true` when signature data is available         |
+| `blockNewPackageNamesInCI`                   | `true` unless allowlisted                       |
+| `blockSuspiciousNameConfusion`               | `true`                                          |
+| `blockKnownMaliciousAdvisories`              | `true`                                          |
+| `warnUnknownPackages`                        | `true` schema default; unknowns currently warn  |
+| `maxRiskScoreAllowed`                        | `70`                                            |
+| `maxRiskScoreWarn`                           | `40`                                            |
+| `allowOverridesWithJustification`            | `true` locally                                  |
+| `disallowOverridesInCI`                      | `true`                                          |
+| `approvedRegistryHosts`                      | `["registry.npmjs.org"]`                        |
+| `requiredIntelligenceSources`                | `[]`                                            |
+| `requireTarballInspection`                   | `false`                                         |
+| `requireIntegrityMatch`                      | `false`                                         |
+| `inspectTransitiveDependencies`              | `false`                                         |
+| `maxDependencyClosurePackages`               | `250`                                           |
+| `blockCredentialHarvestingPatterns`          | `true`; hard-blocks in CI/production            |
+| `blockInstallDownloaders`                    | `true`; hard-blocks in CI/production            |
+| `requireWorkflowShaPinning`                  | `false`                                         |
+| `forbidReleaseCaches`                        | `false`                                         |
+| `expectedProvenance`                         | `[]`                                            |
+| `sourceVerification`                         | `{ "enabled": false, "rules": [] }`             |
+| `emergencyDenylist`                          | `[]`                                            |
 
 Profiles:
 
 - `default`: local-friendly static policy with CI-specific blocking.
-- `production`: requires registry tarball inspection, transitive dependency inspection, integrity matching, workflow SHA pinning, release cache blocking, credential-harvesting and install-downloader blocking, and local advisory availability.
-- `audit-only`: keeps findings visible while disabling hard blocks that would otherwise stop install decisions.
+- `production`: requires registry tarball inspection, transitive dependency inspection, integrity matching, workflow SHA pinning, release cache blocking, credential-harvesting and install-downloader blocking, and sets `requiredIntelligenceSources` to `["local"]`.
+- `audit-only`: relaxes configurable hardening flags and raises the score block threshold while keeping findings visible. Non-overridable hard-block signals, such as integrity mismatches or unsafe workflow trust boundaries, can still block.
 
 Policy modes:
 
 - `balanced`: blocks obvious install-time execution risk, reports lower-confidence risk as warning or manual review, and preserves local developer velocity.
-- `strict`: fails block and manual-review decisions. This mode is selected by `npm-gate ci`, `NPM_GATE_MODE=ci`, `profile: "production"`, and production scans unless overridden.
+- `strict`: fails warning, manual-review, and block decisions at the command exit-code layer. This mode is selected by `npm-gate ci`, `NPM_GATE_MODE=ci`, `profile: "production"`, and production scans unless overridden.
 - `emergency`: blocks every non-info signal unless a narrow lifecycle script allowlist entry matches. It is intended for active incident response and local denylist lockfile rescans.
+
+Runtime modes:
+
+- `warn`: default local enforcement; warnings do not fail the command.
+- `block`: turns warning decisions into block decisions.
+- `ci`: applies CI semantics and selects strict policy mode unless explicitly overridden.
+- `off`: disables enforcement decisions. For `install` and `add`, it delegates directly unless `--dry-run` or `--no-execute` is set.
 
 Every finding includes package or workflow target, version when applicable, decision, score, severity, reasons, evidence, remediation, and whether an exception can override the finding. Newer reports also include additive fields such as `riskCategory`, `matchedSignals`, `evidenceSummary`, `recommendedFix`, `policyMode`, `allowlist`, and `dependencyPath`. Existing JSON consumers can keep using the original fields.
 
@@ -73,9 +80,9 @@ Info-only evidence such as a tarball hash does not create a warning by itself. L
 
 npm-gate inspects `preinstall`, `install`, `postinstall`, `prepare`, `prepublish`, `prepublishOnly`, `prepack`, `postpack`, and suspicious `pre*` or `post*` script variants. High-risk script signals include shell interpreters, downloader commands, shell pipes, PowerShell web requests, global package installs, `chmod +x` followed by execution, package-manager recursion, Bun or runtime bootstrap behavior, direct native binary execution, Windows native loader execution such as `rundll32` or `regsvr32`, base64 payloads, `eval`, and `Function` constructor use.
 
-Strict mode blocks new or changed lifecycle scripts and high-risk install-time patterns. Balanced mode blocks obvious execution risk and marks newly added lifecycle hooks for manual review. Emergency mode blocks all new or changed lifecycle scripts unless an exact script hash allowlist entry matches.
+Strict mode blocks new or changed lifecycle scripts and high-risk install-time patterns. Balanced mode blocks detected lifecycle scripts when `blockLifecycleScripts` is enabled and marks newly added lifecycle hooks for manual review. Emergency mode blocks all new or changed lifecycle scripts unless an exact script hash allowlist entry matches.
 
-Package allowlists are not lifecycle execution allowlists. A lifecycle script allowlist entry must include package name, exact version, script name, SHA-256 of the exact command, non-empty justification, optional expiry, and integrity or tarball hash when available. Package-name-only lifecycle allowlists are rejected because they would let future authenticated publishes execute new code without review.
+Package allowlists are not lifecycle execution allowlists. The script allowlist file is `.npm-gate/script-allowlist.json` and must be a JSON object with an `allowlist`, `entries`, or `scripts` array. Each lifecycle script allowlist entry must include package name, exact version, script name, SHA-256 of the exact command, non-empty justification, optional expiry, and registry integrity when available. Package-name-only lifecycle allowlists are rejected because they would let future authenticated publishes execute new code without review.
 
 ## Artifact And Dependency Delta Policy
 
@@ -85,7 +92,7 @@ Dependency delta analysis compares direct and transitive dependency closures. Pa
 
 ## Typosquat And Dependency Confusion Policy
 
-Name-confusion checks compare packages to configured protected names and a small built-in set of common ecosystem packages. Signals include edit distance, missing or extra separators, token-order confusion, suffix or prefix additions, scoped/unscoped confusion, and namespace confusion. High-confidence findings block. Medium-confidence findings require manual review. Low-confidence name similarity remains a warning.
+Name-confusion checks compare packages to configured `protectedPackageNames`. Signals include edit distance, missing or extra separators, token-order confusion, suffix or prefix additions, and scoped/unscoped confusion. The current analyzer emits medium- or high-confidence `name-confusion` signals; with `blockSuspiciousNameConfusion` enabled, emitted name-confusion signals block.
 
 ## Provenance Policy
 
@@ -111,7 +118,7 @@ Optional source verification is separate from npm provenance. It can verify conf
 }
 ```
 
-Repository values may be `owner/repo`, `https://github.com/owner/repo`, or `.git` URLs. `packageJsonPath` defaults to `package.json`. When a source ref is available, npm-gate compares the published manifest with the configured source manifest for lifecycle scripts, dependency sections, `bin`, `main`, `exports`, `files`, and repository metadata. Required failures block in strict and emergency mode. Optional failures require review. Tests should use an injected verifier and must not depend on live GitHub access.
+Repository values may be `owner/repo`, `https://github.com/owner/repo`, or `.git` URLs. `packageJsonPath` defaults to `package.json`. When a source ref is available, npm-gate compares the published manifest with the configured source manifest for lifecycle scripts, dependency sections, `bin`, `main`, `exports`, `files`, and repository metadata. The default verifier queries `api.github.com` when source verification is enabled. Required failures block in strict and emergency mode. Optional failures require review. Tests should use an injected verifier and must not depend on live GitHub access.
 
 ## Production CI Policy
 
@@ -119,7 +126,7 @@ Repository values may be `owner/repo`, `https://github.com/owner/repo`, or `.git
 
 Transitive dependency tarball inspection is opt-in with `--deep-tarballs` or the clearer `npm-gate ci --release-audit` shortcut. This keeps normal CI runtime bounded while still allowing slower release and incident audits to fetch and inspect transitive package artifacts.
 
-Required intelligence sources fail closed in CI. `local` is satisfied by the local advisory file path even when no records exist. `osv` uses the OSV querybatch-compatible intelligence client when configured.
+Configured OSV intelligence fails closed when `osv` is required and unavailable. `local` is treated as the built-in local advisory feed and is satisfied even when `npm-gate-advisories.json` is absent or contains no records. `npm-audit` advisories are supplied by the `npm-gate audit` command; the current `requiredIntelligenceSources` enforcement path does not launch `npm audit` on its own.
 
 ## Frontend Runtime Policy
 

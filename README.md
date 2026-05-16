@@ -2,12 +2,12 @@
 
 npm-gate is a defensive npm supply-chain security system. It wraps common npm commands, evaluates dependency risk before install, enforces local or CI policy, and writes auditable evidence for each allow, warning, or block decision.
 
-Dependency installation is code execution. npm lifecycle hooks such as `preinstall`, `install`, `postinstall`, `prepare`, `prepack`, and `postpack` can run arbitrary code during package installation. npm-gate treats installation as a security gate, not a blind package manager operation.
+Dependency installation is code execution. npm lifecycle hooks such as `preinstall`, `install`, `postinstall`, `prepare`, `prepublish`, `prepublishOnly`, `prepack`, and `postpack` can run arbitrary code during package installation. npm-gate treats installation as a security gate, not a blind package manager operation.
 
 ## Installation
 
 ```sh
-pnpm install
+pnpm install --ignore-scripts
 pnpm build
 pnpm link --global
 ```
@@ -36,11 +36,14 @@ npm-gate install axios --package-manager pnpm
 npm-gate add lodash
 npm-gate ci
 npm-gate ci --release-audit
+npm-gate ci --previous-package-lock ../baseline/package-lock.json
 npm-gate audit
 npm-gate scan
+npm-gate scan --tarballs
 npm-gate scan --policy-mode emergency
 npm-gate emergency
 npm-gate explain workflow-cache-poisoning-risk:.github/workflows/release.yml
+npm-gate install ./pkg.tgz --sandbox-plan
 npm-gate doctor
 npm-gate report --format json
 npm-gate allow axios@1.6.0 --reason "SEC-123 approved review"
@@ -58,13 +61,17 @@ alias npmci="npm-gate ci"
 
 By default, local mode uses balanced policy, allows warnings, and blocks high-confidence execution risk. Use `--policy-mode strict` or `--strict` to convert warnings and manual-review findings into failed gates. Use `--no-execute` or `--dry-run` to prevent npm delegation.
 
+`install` and `add` delegate to `pnpm` when `pnpm-lock.yaml` exists, otherwise `npm`. Override with `--package-manager npm|pnpm` or `NPM_GATE_PACKAGE_MANAGER=npm|pnpm`. `--sandbox-plan` prints the static, non-executing analysis plan and never delegates to a package manager.
+
 ## Policy Modes
 
 - `balanced`: local developer default. Blocks obvious install-time execution risk and reports lower-confidence risk as warnings or manual review.
-- `strict`: CI and production default. Blocks high-confidence risk, fails manual-review findings, inspects transitive dependencies when configured, and treats unsafe CI trust boundaries as release blockers.
+- `strict`: CI and production default. Blocks high-confidence risk, fails warning and manual-review findings at exit, inspects transitive dependencies when configured, and treats unsafe CI trust boundaries as release blockers.
 - `emergency`: incident-response mode. Blocks every non-info signal unless a narrow script allowlist entry matches, consumes only local emergency denylist config, rescans lockfiles, and prints credential-rotation plus CI-cleanup checklists.
 
 `NPM_GATE_POLICY_MODE=balanced|strict|emergency` overrides config. `npm-gate ci`, `NPM_GATE_MODE=ci`, `profile: "production"`, and `--production` select strict behavior unless explicitly overridden.
+
+Runtime mode is separate from policy mode. `NPM_GATE_MODE=warn` is the default, `block` turns warning decisions into block decisions, `ci` enables CI semantics, and `off` disables enforcement; for `install` and `add`, `off` delegates directly unless `--dry-run` or `--no-execute` is set.
 
 ## Direct Source Installs
 
@@ -161,7 +168,7 @@ JSON is supported. YAML config is intentionally not enabled in this minimal depe
 
 ## Policy Example
 
-The default policy warns on unknown packages, suspicious name confusion, suspicious static tarball content, missing provenance when required, missing registry signature data when available, dependency deltas, and lower-confidence frontend runtime risk. It blocks known malicious advisories, high-risk lifecycle execution, downloader scripts, obfuscated install payloads, strict-mode Git dependencies, CI-only new package names, unapproved lockfile hosts, registry tarball integrity mismatches, dangerous workflow trust boundaries, CI or production credential-harvesting and install-downloader patterns, emergency denylist hits, project source CDN `latest` findings in strict gates, and scores above the configured block threshold.
+The default policy warns on unknown packages, suspicious static tarball content, missing registry signature data when available, dependency deltas, and lower-confidence frontend runtime risk. When configured with `protectedPackageNames` or high-impact package rules, it also evaluates name-confusion and required provenance. It blocks known malicious advisories, high-risk lifecycle execution, downloader scripts, obfuscated install payloads, strict-mode Git dependencies, CI-only new package names, unapproved lockfile hosts, registry tarball integrity mismatches, dangerous workflow trust boundaries, CI or production credential-harvesting and install-downloader patterns, emergency denylist hits, project source CDN `latest` findings in strict gates, and scores above the configured block threshold.
 
 Provenance and trusted publishing are publish-path signals only. They never suppress lifecycle-script, artifact-diff, dependency-delta, typosquat, frontend runtime, or CI trust-boundary findings.
 
@@ -173,23 +180,25 @@ Project source files are also scanned for CDN `@latest` script references and ex
 
 ## Lifecycle Script Allowlist
 
-Package-name allowlists do not authorize lifecycle execution. To approve an install-time script, add `.npm-gate/script-allowlist.json` with an exact package, exact version, script name, SHA-256 of the exact command, non-empty justification, optional expiry, and registry integrity or tarball hash when available:
+Package-name allowlists do not authorize lifecycle execution. To approve an install-time script, add `.npm-gate/script-allowlist.json` with an `allowlist`, `entries`, or `scripts` array containing an exact package, exact version, script name, SHA-256 of the exact command, non-empty justification, optional expiry, and registry integrity when available:
 
 ```json
-[
-  {
-    "package": "native-addon",
-    "version": "1.0.0",
-    "script": "install",
-    "commandSha256": "0000000000000000000000000000000000000000000000000000000000000000",
-    "integrity": "sha512-reviewed-integrity",
-    "expiresAt": "2026-06-30T00:00:00.000Z",
-    "justification": "Reviewed native build bootstrap in SEC-42"
-  }
-]
+{
+  "allowlist": [
+    {
+      "package": "native-addon",
+      "version": "1.0.0",
+      "script": "install",
+      "commandSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "integrity": "sha512-reviewed-integrity",
+      "expiresAt": "2026-06-30T00:00:00.000Z",
+      "justification": "Reviewed native build bootstrap in SEC-42"
+    }
+  ]
+}
 ```
 
-If the script command, version, package, integrity, tarball hash, expiry, or justification changes, the entry no longer authorizes the script. This prevents broad package allowlists from becoming permanent install-time code execution bypasses.
+If the script command, version, package, registry integrity, expiry, or justification changes, the entry no longer authorizes the script. This prevents broad package allowlists from becoming permanent install-time code execution bypasses.
 
 ## Report Example
 
@@ -220,11 +229,11 @@ SARIF output keeps the existing rule/result shape and adds finding metadata such
 
 ## Limitations
 
-npm-gate uses deterministic static heuristics. It does not execute package code, does not perform live detonation, does not clone Git sources, does not fetch arbitrary remote tarball hosts, does not claim complete cryptographic provenance verification, and cannot catch all malicious code that activates only at runtime. Production policy inspects direct registry tarballs by default and keeps transitive dependency inspection bounded; `ci --release-audit` opts into exhaustive transitive tarball inspection for slower release and incident audits. Obfuscated runtime-only malware can still evade static rules. Provenance, signatures, legitimate maintainer identity, registry publish validity, and trusted publishing are treated as evidence, not as sufficient proof that a release pipeline was safe. Registry metadata, signatures, and provenance are reported as `unknown` or `unavailable` when the implemented registry path cannot verify them.
+npm-gate uses deterministic static heuristics. It does not execute package code, does not perform live detonation, does not clone Git sources, does not fetch arbitrary remote tarball hosts, does not claim complete cryptographic provenance verification, and cannot catch all malicious code that activates only at runtime. Production policy inspects direct registry tarballs by default and keeps transitive dependency inspection bounded; `ci --release-audit` opts into exhaustive transitive tarball inspection for slower release and incident audits. Obfuscated runtime-only malware can still evade static rules. Provenance, signatures, legitimate maintainer identity, registry publish validity, and trusted publishing are treated as evidence, not as sufficient proof that a release pipeline was safe. Registry metadata, signatures, and provenance are reported as `unknown` or `unavailable` when the implemented registry path cannot verify them. Optional source verification uses GitHub metadata and configured source `package.json` files; optional OSV intelligence uses the OSV API when configured.
 
 ## Security Model
 
-The tool is defensive-only. It only fetches npm registry metadata or registry tarballs needed for package analysis. Local tarball and directory installs are inspected statically and never executed during analysis. Credential checks report categories only, such as npm token environment, GitHub token environment, cloud credential environment, SSH agent, `.npmrc` token category, CI secrets context, writable home, and sensitive local paths. Secret values are never printed. npm-gate does not access cloud metadata services and never runs lifecycle scripts during analysis.
+The tool is defensive-only. By default it fetches npm registry metadata and registry tarballs needed for package analysis. When explicitly configured, it can also query OSV advisory data and GitHub source metadata or source `package.json` files for source verification. Local tarball and directory installs are inspected statically and never executed during analysis. Credential checks report categories only, such as npm token environment, GitHub token environment, cloud credential environment, SSH agent, `.npmrc` token category, CI secrets context, writable home, and sensitive local paths. Secret values are never printed. npm-gate does not access cloud metadata services and never runs lifecycle scripts during analysis.
 
 ## Contributing
 

@@ -42,10 +42,28 @@ Direct Git sources are not cloned. They warn locally and block in strict, block,
 NPM_GATE_MODE=ci npm-gate ci --json
 ```
 
+## Compare a Package Lock Baseline
+
+```sh
+NPM_GATE_MODE=ci npm-gate ci --previous-package-lock ../baseline/package-lock.json --json
+```
+
 ## Strict Local Gate Without Install Execution
 
 ```sh
 npm-gate install axios --dry-run --policy-mode strict --json
+```
+
+## Scan Registry Tarballs
+
+```sh
+npm-gate scan --tarballs --json
+```
+
+## Print a Static Sandbox Plan
+
+```sh
+npm-gate install ./pkg.tgz --sandbox-plan
 ```
 
 ## Emergency Lockfile Rescan
@@ -57,7 +75,7 @@ npm-gate emergency --json > npm-gate-emergency-report.json
 ## Add an Allowlist Entry
 
 ```sh
-npm-gate allow lodash@^4.17.21 --reason "Approved base dependency SEC-42"
+npm-gate allow lodash@^4.17.21 --reason "Approved base dependency SEC-42" --expires-at 2026-06-30T00:00:00.000Z
 ```
 
 Package allowlists approve package-name policy only. They do not authorize lifecycle script execution.
@@ -67,20 +85,22 @@ Package allowlists approve package-name policy only. They do not authorize lifec
 Create `.npm-gate/script-allowlist.json`:
 
 ```json
-[
-  {
-    "package": "native-addon",
-    "version": "1.0.0",
-    "script": "install",
-    "commandSha256": "0000000000000000000000000000000000000000000000000000000000000000",
-    "integrity": "sha512-reviewed-integrity",
-    "expiresAt": "2026-06-30T00:00:00.000Z",
-    "justification": "Reviewed native install script in SEC-42"
-  }
-]
+{
+  "allowlist": [
+    {
+      "package": "native-addon",
+      "version": "1.0.0",
+      "script": "install",
+      "commandSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "integrity": "sha512-reviewed-integrity",
+      "expiresAt": "2026-06-30T00:00:00.000Z",
+      "justification": "Reviewed native install script in SEC-42"
+    }
+  ]
+}
 ```
 
-The package name, exact version, script name, command hash, justification, and integrity or tarball hash must match. Expired entries and package-name-only entries do not authorize execution.
+The package name, exact version, script name, command hash, justification, and registry integrity must match when integrity evidence is available. Expired entries and package-name-only entries do not authorize execution.
 
 ## Explain a Package
 
@@ -138,7 +158,7 @@ The original JSON fields remain present. The additional fields are additive for 
 }
 ```
 
-Source verification is optional and package-scoped. It checks configured GitHub tags and commits but does not make provenance or trusted publishing a safety bypass.
+Source verification is optional and package-scoped. When enabled, the default verifier queries GitHub tag, commit, and configured `package.json` metadata; it does not make provenance or trusted publishing a safety bypass.
 
 ## Generate Enriched SARIF
 

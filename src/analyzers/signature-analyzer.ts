@@ -1,4 +1,5 @@
 import type { PackageManifest, ProvenanceStatus, RiskSignal } from '../core/types.js';
+import type { SignatureVerificationResult } from '../verification/signature-verifier.js';
 
 export function getSignatureStatus(manifest: PackageManifest | undefined): ProvenanceStatus {
   if (!manifest) return 'unknown';
@@ -34,4 +35,34 @@ export function signatureSignal(
     remediation: ['Prefer signed releases when registry signature data is available.'],
     canOverride: !requireSignature
   };
+}
+
+export function signatureVerificationSignals(input: {
+  packageName: string;
+  version: string;
+  required: boolean;
+  result: SignatureVerificationResult;
+}): RiskSignal[] {
+  if (input.result.status === 'verified') return [];
+  return [
+    {
+      id:
+        input.result.status === 'unavailable'
+          ? 'signature-verification-unavailable'
+          : 'signature-verification-failed',
+      score: input.required ? 70 : 35,
+      severity: input.required ? 'high' : 'medium',
+      riskCategory: 'provenance_risk',
+      message: `Cryptographic signature verification ${input.result.status} for ${input.packageName}@${input.version}`,
+      evidence: [
+        {
+          type: 'signature-verification',
+          message: input.result.message ?? input.result.status,
+          value: input.result
+        }
+      ],
+      remediation: ['Verify npm registry signatures and provenance attestations before release.'],
+      canOverride: !input.required
+    }
+  ];
 }

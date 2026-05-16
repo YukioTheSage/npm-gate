@@ -82,6 +82,9 @@ describe('config loader', () => {
     expect(production.policyMode).toBe('strict');
     expect(production.policy.requireTarballInspection).toBe(true);
     expect(production.policy.requireIntegrityMatch).toBe(true);
+    expect(production.policy.verifyRegistrySignatures).toBe(false);
+    expect(production.policy.requireCryptographicSignatureVerification).toBe(false);
+    expect(production.policy.fullTextTarballScanning).toBe(true);
     expect(production.policy.inspectTransitiveDependencies).toBe(true);
     expect(production.policy.maxDependencyClosurePackages).toBe(250);
     expect(production.policy.blockCredentialHarvestingPatterns).toBe(true);
@@ -112,6 +115,53 @@ describe('config loader', () => {
     expect(auditOnly.policy.blockLifecycleScripts).toBe(false);
     expect(auditOnly.policy.blockKnownMaliciousAdvisories).toBe(false);
     expect(auditOnly.policy.requireTarballInspection).toBe(false);
+    expect(auditOnly.policy.fullTextTarballScanning).toBe(false);
     expect(auditOnly.policy.inspectTransitiveDependencies).toBe(false);
+  });
+
+  test('loads trusted publishing policy for high impact packages', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'npm-gate-trusted-publishing-'));
+    await writeFile(
+      join(cwd, 'npm-gate.config.json'),
+      JSON.stringify({
+        profile: 'production',
+        highImpactPackageNames: ['@company/core'],
+        requireTrustedPublishingForHighImpactPackages: true,
+        trustedPublishing: [
+          {
+            package: '@company/core',
+            repository: 'company/core',
+            workflow: '.github/workflows/publish.yml'
+          }
+        ]
+      })
+    );
+
+    const loaded = await loadConfig({ cwd, env: { NPM_GATE_MODE: 'ci' } });
+
+    expect(loaded.policy.requireTrustedPublishingForHighImpactPackages).toBe(true);
+    expect(loaded.policy.trustedPublishing).toEqual([
+      {
+        package: '@company/core',
+        repository: 'company/core',
+        workflow: '.github/workflows/publish.yml'
+      }
+    ]);
+  });
+
+  test('loads cryptographic signature verification policy', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'npm-gate-signature-policy-'));
+    await writeFile(
+      join(cwd, 'npm-gate.config.json'),
+      JSON.stringify({
+        verifyRegistrySignatures: true,
+        requireCryptographicSignatureVerification: true
+      })
+    );
+
+    const loaded = await loadConfig({ cwd, env: { NPM_GATE_MODE: 'ci' } });
+
+    expect(loaded.policy.verifyRegistrySignatures).toBe(true);
+    expect(loaded.policy.requireCryptographicSignatureVerification).toBe(true);
   });
 });

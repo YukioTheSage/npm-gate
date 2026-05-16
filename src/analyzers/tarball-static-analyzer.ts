@@ -1,10 +1,21 @@
 import { isAbsolute, normalize, sep, win32 } from 'node:path';
 import type { RiskSignal, TarballEntry } from '../core/types.js';
 import { analyzeFrontendRuntimeEntries } from './frontend-runtime-analyzer.js';
+import { firstInvisibleUnicodeMatch } from './text-content-analyzer.js';
 
 const hiddenDirectories = new Set(['.github', '.vscode', '.claude']);
 const binaryExtensions = new Set(['.exe', '.dll', '.so', '.dylib', '.node', '.elf']);
 const scriptExtensions = new Set(['.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd']);
+const executableTextExtensions = new Set([
+  '.cjs',
+  '.cmd',
+  '.js',
+  '.json',
+  '.mjs',
+  '.ps1',
+  '.sh',
+  '.ts'
+]);
 
 const credentialHarvestingPatterns: Array<[string, RegExp]> = [
   [
@@ -120,6 +131,10 @@ function firstMatch(sample: string, patterns: Array<[string, RegExp]>): string |
   return patterns.find(([, pattern]) => pattern.test(sample))?.[0];
 }
 
+function isExecutableTextExtension(ext: string): boolean {
+  return executableTextExtensions.has(ext);
+}
+
 export function analyzeTarballEntries(entries: TarballEntry[]): { signals: RiskSignal[] } {
   const signals: RiskSignal[] = [];
   for (const entry of entries) {
@@ -183,8 +198,25 @@ export function analyzeTarballEntries(entries: TarballEntry[]): { signals: RiskS
       );
     }
 
-    if (!entry.sample) continue;
-    const credentialMatch = firstMatch(entry.sample, credentialHarvestingPatterns);
+    const content = entry.fullText ?? entry.sample;
+    if (content) {
+      const unicodeMatch = firstInvisibleUnicodeMatch(content);
+      if (unicodeMatch && isExecutableTextExtension(ext)) {
+        signals.push(
+          contentSignal(
+            'invisible-unicode-source',
+            60,
+            `Invisible Unicode control found in tarball source: ${entry.path}`,
+            entry,
+            'high',
+            unicodeMatch.label
+          )
+        );
+      }
+    }
+
+    if (!content) continue;
+    const credentialMatch = firstMatch(content, credentialHarvestingPatterns);
     if (credentialMatch) {
       signals.push(
         contentSignal(
@@ -198,7 +230,7 @@ export function analyzeTarballEntries(entries: TarballEntry[]): { signals: RiskS
       );
     }
 
-    const downloaderMatch = firstMatch(entry.sample, installDownloaderPatterns);
+    const downloaderMatch = firstMatch(content, installDownloaderPatterns);
     if (downloaderMatch) {
       signals.push(
         contentSignal(
@@ -212,7 +244,7 @@ export function analyzeTarballEntries(entries: TarballEntry[]): { signals: RiskS
       );
     }
 
-    if (childProcessPattern.test(entry.sample) && networkExfilPattern.test(entry.sample)) {
+    if (childProcessPattern.test(content) && networkExfilPattern.test(content)) {
       signals.push(
         contentSignal(
           'child-process-network-exfil',
@@ -225,7 +257,7 @@ export function analyzeTarballEntries(entries: TarballEntry[]): { signals: RiskS
       );
     }
 
-    if (processEnvPattern.test(entry.sample) && networkExfilPattern.test(entry.sample)) {
+    if (processEnvPattern.test(content) && networkExfilPattern.test(content)) {
       signals.push(
         contentSignal(
           'process-env-network-exfil',
@@ -238,7 +270,7 @@ export function analyzeTarballEntries(entries: TarballEntry[]): { signals: RiskS
       );
     }
 
-    const obfuscationMatch = firstMatch(entry.sample, obfuscationPatterns);
+    const obfuscationMatch = firstMatch(content, obfuscationPatterns);
     if (obfuscationMatch) {
       signals.push(
         contentSignal(
@@ -252,7 +284,7 @@ export function analyzeTarballEntries(entries: TarballEntry[]): { signals: RiskS
       );
     }
 
-    const walletMatch = firstMatch(entry.sample, walletHookPatterns);
+    const walletMatch = firstMatch(content, walletHookPatterns);
     if (walletMatch) {
       signals.push(
         contentSignal(

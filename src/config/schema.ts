@@ -4,7 +4,7 @@ import { defaultPolicy } from './default-policy.js';
 export const runtimeModeSchema = z.enum(['off', 'warn', 'block', 'ci']);
 export const policyProfileSchema = z.enum(['default', 'production', 'audit-only']);
 export const policyModeSchema = z.enum(['balanced', 'strict', 'emergency']);
-export const intelligenceSourceSchema = z.enum(['npm-audit', 'osv', 'local']);
+export const intelligenceSourceSchema = z.enum(['npm-audit', 'osv', 'local', 'signed-feed']);
 
 export const policySchema = z
   .object({
@@ -22,6 +22,13 @@ export const policySchema = z
     requireProvenanceForHighImpactPackages: z
       .boolean()
       .default(defaultPolicy.requireProvenanceForHighImpactPackages),
+    requireTrustedPublishingForHighImpactPackages: z
+      .boolean()
+      .default(defaultPolicy.requireTrustedPublishingForHighImpactPackages),
+    verifyRegistrySignatures: z.boolean().default(defaultPolicy.verifyRegistrySignatures),
+    requireCryptographicSignatureVerification: z
+      .boolean()
+      .default(defaultPolicy.requireCryptographicSignatureVerification),
     warnMissingProvenanceWhenPreviouslyPresent: z
       .boolean()
       .default(defaultPolicy.warnMissingProvenanceWhenPreviouslyPresent),
@@ -48,9 +55,18 @@ export const policySchema = z
     requiredIntelligenceSources: z
       .array(intelligenceSourceSchema)
       .default(defaultPolicy.requiredIntelligenceSources),
+    signedIncidentFeeds: z
+      .array(
+        z.object({
+          path: z.string().min(1),
+          publicKeyPem: z.string().min(1)
+        })
+      )
+      .default(defaultPolicy.signedIncidentFeeds),
     approvedRegistryHosts: z.array(z.string().min(1)).default(defaultPolicy.approvedRegistryHosts),
     requireTarballInspection: z.boolean().default(defaultPolicy.requireTarballInspection),
     requireIntegrityMatch: z.boolean().default(defaultPolicy.requireIntegrityMatch),
+    fullTextTarballScanning: z.boolean().default(defaultPolicy.fullTextTarballScanning),
     inspectTransitiveDependencies: z
       .boolean()
       .default(defaultPolicy.inspectTransitiveDependencies),
@@ -85,6 +101,16 @@ export const policySchema = z
         })
       )
       .default(defaultPolicy.expectedProvenance),
+    trustedPublishing: z
+      .array(
+        z.object({
+          package: z.string().min(1),
+          repository: z.string().min(1).optional(),
+          workflow: z.string().min(1).optional(),
+          issuer: z.string().min(1).optional()
+        })
+      )
+      .default(defaultPolicy.trustedPublishing),
     sourceVerification: z
       .object({
         enabled: z.boolean().default(defaultPolicy.sourceVerification.enabled),

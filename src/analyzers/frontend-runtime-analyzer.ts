@@ -75,9 +75,10 @@ const patterns: Array<{
 export function analyzeFrontendRuntimeEntries(entries: TarballEntry[]): RiskSignal[] {
   const signals: RiskSignal[] = [];
   for (const entry of entries) {
-    if (!entry.sample) continue;
+    const content = entry.fullText ?? entry.sample;
+    if (!content) continue;
     for (const rule of patterns) {
-      if (!rule.pattern.test(entry.sample)) continue;
+      if (!rule.pattern.test(content)) continue;
       signals.push({
         id: rule.id,
         score: rule.score,

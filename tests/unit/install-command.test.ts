@@ -170,6 +170,47 @@ describe('install command delegation', () => {
     );
   });
 
+  test('sandbox execute delegates with ignore scripts and scrubbed env after policy allows', async () => {
+    mocks.evaluatePackages.mockResolvedValue({
+      startedAt: '2026-05-14T00:00:00.000Z',
+      toolVersion: '0.1.0',
+      mode: 'warn',
+      configSource: 'default',
+      findings: [
+        {
+          id: 'clean:left-pad@1.3.0',
+          package: 'left-pad',
+          version: '1.3.0',
+          decision: 'allow',
+          severity: 'info',
+          score: 0,
+          reasons: ['No policy issues detected'],
+          evidence: [],
+          remediation: [],
+          canOverride: false
+        }
+      ],
+      summary: { allow: 1, warn: 0, block: 0, suppressed: 0 }
+    });
+    mocks.runPackageManager.mockResolvedValue(0);
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    await makeProgram().parseAsync(['install', 'left-pad', '--sandbox-execute'], {
+      from: 'user'
+    });
+
+    expect(mocks.runPackageManager).toHaveBeenCalledWith(
+      'npm',
+      ['install', 'left-pad', '--ignore-scripts'],
+      process.cwd(),
+      expect.objectContaining({
+        env: expect.objectContaining({ HOME: expect.any(String), USERPROFILE: expect.any(String) })
+      })
+    );
+    expect(mocks.runPackageManager.mock.calls[0]?.[3]?.env.NPM_TOKEN).toBeUndefined();
+  });
+
   test('passes remote tarball candidates into evaluation', async () => {
     const spec = 'https://registry.npmjs.org/fixture/-/fixture-1.0.0.tgz';
     mocks.evaluatePackages.mockResolvedValue({
@@ -230,6 +271,33 @@ describe('install command delegation', () => {
     expect(mocks.evaluatePackages).toHaveBeenCalledWith(
       expect.objectContaining({ policyMode: 'emergency' })
     );
+  });
+
+  test('does not honor NPM_GATE_MODE=off in CI', async () => {
+    const originalMode = process.env.NPM_GATE_MODE;
+    const originalCi = process.env.CI;
+    process.env.NPM_GATE_MODE = 'off';
+    process.env.CI = 'true';
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      await expect(
+        makeProgram().parseAsync(['install', 'left-pad'], { from: 'user' })
+      ).rejects.toThrow(/NPM_GATE_MODE=off is forbidden/);
+
+      expect(mocks.runPackageManager).not.toHaveBeenCalled();
+    } finally {
+      if (originalMode === undefined) {
+        delete process.env.NPM_GATE_MODE;
+      } else {
+        process.env.NPM_GATE_MODE = originalMode;
+      }
+      if (originalCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = originalCi;
+      }
+    }
   });
 
   test('strict policy mode blocks manual review findings before delegation', async () => {

@@ -10,6 +10,7 @@ import { analyzeTarballEntries, assertSafeTarPath } from '../analyzers/tarball-s
 
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_ENTRY_SAMPLE_BYTES = 16 * 1024;
+const DEFAULT_MAX_FULL_TEXT_ENTRY_BYTES = 1024 * 1024;
 const sampleExtensions = new Set([
   '.cjs',
   '.cmd',
@@ -27,16 +28,24 @@ export interface TarballInspection {
   signals: RiskSignal[];
 }
 
+export interface TarballInspectionOptions {
+  fullTextScanning?: boolean;
+  maxFullTextEntryBytes?: number;
+}
+
 export interface RegistryPackageTarballInspection extends TarballInspection {
   manifest?: PackageManifest;
 }
 
-export async function inspectTarballBuffer(buffer: Buffer): Promise<TarballInspection> {
+export async function inspectTarballBuffer(
+  buffer: Buffer,
+  options: TarballInspectionOptions = {}
+): Promise<TarballInspection> {
   const dir = await mkdtemp(join(tmpdir(), 'npm-gate-tarball-'));
   const path = join(dir, 'package.tgz');
   try {
     await writeFile(path, buffer);
-    return inspectTarballFile(path, sha256Buffer(buffer));
+    return inspectTarballFile(path, sha256Buffer(buffer), options);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -44,20 +53,29 @@ export async function inspectTarballBuffer(buffer: Buffer): Promise<TarballInspe
 
 export async function inspectTarballFile(
   path: string,
-  knownHash?: string
+  knownHash?: string,
+  options: TarballInspectionOptions = {}
 ): Promise<TarballInspection> {
   const entries: TarballEntry[] = [];
+  const maxFullTextEntryBytes =
+    options.maxFullTextEntryBytes ?? DEFAULT_MAX_FULL_TEXT_ENTRY_BYTES;
   await tar.t({
     file: path,
     onentry(entry) {
       assertSafeTarPath(entry.path);
-      const tarballEntry: TarballEntry = { path: entry.path, size: entry.size ?? 0 };
+      const size = entry.size ?? 0;
+      const tarballEntry: TarballEntry = { path: entry.path, size };
       entries.push(tarballEntry);
 
-      if (!shouldSampleEntry(entry.path, entry.size ?? 0)) return;
+      if (!shouldSampleEntry(entry.path, size)) return;
       const chunks: Buffer[] = [];
+      const fullTextChunks: Buffer[] = [];
       let sampledBytes = 0;
+      const collectFullText = Boolean(options.fullTextScanning && size <= maxFullTextEntryBytes);
       entry.on('data', (chunk: Buffer) => {
+        if (collectFullText) {
+          fullTextChunks.push(chunk);
+        }
         if (sampledBytes >= MAX_ENTRY_SAMPLE_BYTES) return;
         const remaining = MAX_ENTRY_SAMPLE_BYTES - sampledBytes;
         const next = chunk.subarray(0, remaining);
@@ -66,6 +84,9 @@ export async function inspectTarballFile(
       });
       entry.on('end', () => {
         tarballEntry.sample = Buffer.concat(chunks).toString('utf8');
+        if (collectFullText) {
+          tarballEntry.fullText = Buffer.concat(fullTextChunks).toString('utf8');
+        }
       });
     }
   });
@@ -205,11 +226,12 @@ function verifySubresourceIntegrity(
 export async function inspectRegistryTarball(
   client: RegistryClient,
   tarballUrl: string,
-  expectedIntegrity?: string
+  expectedIntegrity?: string,
+  options: TarballInspectionOptions = {}
 ): Promise<TarballInspection | undefined> {
   if (!client.fetchTarball) return undefined;
   const buffer = await client.fetchTarball(tarballUrl);
-  const inspection = await inspectTarballBuffer(buffer);
+  const inspection = await inspectTarballBuffer(buffer, options);
   if (expectedIntegrity) {
     const integrity = verifySubresourceIntegrity(buffer, expectedIntegrity);
     if (!integrity.matches) {
@@ -224,7 +246,8 @@ export async function inspectRegistryTarball(
 export async function inspectRegistryPackageTarball(
   client: RegistryClient,
   tarballUrl: string,
-  expectedIntegrity?: string
+  expectedIntegrity?: string,
+  options: TarballInspectionOptions = {}
 ): Promise<RegistryPackageTarballInspection | undefined> {
   if (!client.fetchTarball) return undefined;
   const buffer = await client.fetchTarball(tarballUrl);
@@ -232,7 +255,7 @@ export async function inspectRegistryPackageTarball(
   const path = join(dir, 'package.tgz');
   try {
     await writeFile(path, buffer);
-    const inspection = await inspectTarballFile(path, sha256Buffer(buffer));
+    const inspection = await inspectTarballFile(path, sha256Buffer(buffer), options);
     if (expectedIntegrity) {
       const integrity = verifySubresourceIntegrity(buffer, expectedIntegrity);
       if (!integrity.matches) {

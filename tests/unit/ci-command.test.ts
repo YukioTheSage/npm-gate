@@ -93,4 +93,36 @@ describe('ci command', () => {
     );
     expect(process.exitCode).toBe(0);
   });
+
+  test('passes pnpm and yarn lockfile baselines into project scan', async () => {
+    mocks.scanProject.mockResolvedValue({
+      startedAt: '2026-05-14T00:00:00.000Z',
+      toolVersion: '0.1.0',
+      mode: 'ci',
+      policyMode: 'strict',
+      configSource: 'default',
+      findings: [],
+      summary: { allow: 0, warn: 0, block: 0, suppressed: 0 }
+    });
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    await makeProgram().parseAsync(
+      [
+        'ci',
+        '--previous-pnpm-lock',
+        '../baseline/pnpm-lock.yaml',
+        '--previous-yarn-lock',
+        '../baseline/yarn.lock',
+        '--json'
+      ],
+      { from: 'user' }
+    );
+
+    expect(mocks.scanProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousPnpmLockPath: '../baseline/pnpm-lock.yaml',
+        previousYarnLockPath: '../baseline/yarn.lock'
+      })
+    );
+  });
 });

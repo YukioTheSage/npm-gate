@@ -70,6 +70,43 @@ npm-gate does not pull live incident feeds. Convert reviewed external intelligen
 
 Keep advisory records specific to affected package names and versions. Malicious records block matching versions; vulnerability records remain reviewable according to severity and policy mode.
 
+## Signed Incident Feed
+
+For fast-moving incidents, distribute a reviewed signed snapshot and require it in release CI:
+
+```json
+{
+  "requiredIntelligenceSources": ["local", "signed-feed"],
+  "signedIncidentFeeds": [
+    {
+      "path": "./security/npm-gate-incident-feed.json",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+    }
+  ]
+}
+```
+
+The feed file must use this shape:
+
+```json
+{
+  "payload": {
+    "packages": [
+      {
+        "name": "compromised-package",
+        "versions": ["1.2.3"],
+        "type": "malicious",
+        "severity": "critical",
+        "summary": "Confirmed malicious publish SEC-2026-001"
+      }
+    ]
+  },
+  "signature": "base64-ed25519-signature"
+}
+```
+
+The signature is verified before any record is trusted. If `signed-feed` is listed in `requiredIntelligenceSources`, missing files, invalid keys, schema errors, and signature failures block CI as unavailable intelligence.
+
 ## Credential Rotation Checklist
 
 - Rotate npm automation tokens and publish tokens.

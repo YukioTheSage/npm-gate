@@ -39,9 +39,13 @@ import {
 } from '../analyzers/advisory-analyzer.js';
 import {
   expectedProvenanceSignals,
-  provenanceSignal
+  provenanceSignal,
+  trustedPublishingSignals
 } from '../analyzers/provenance-analyzer.js';
-import { signatureSignal } from '../analyzers/signature-analyzer.js';
+import {
+  signatureSignal,
+  signatureVerificationSignals
+} from '../analyzers/signature-analyzer.js';
 import { analyzeLocalSourceCandidate } from '../analyzers/local-source-analyzer.js';
 import {
   inspectRegistryPackageTarball,
@@ -58,6 +62,9 @@ import {
   sourceVerificationSignals
 } from '../analyzers/source-verification-analyzer.js';
 import { OsvIntelligenceClient } from '../intelligence/osv-client.js';
+import { loadSignedIncidentFeed } from '../intelligence/signed-feed.js';
+import { NpmAuditSignaturesVerifier } from '../verification/npm-audit-signatures-verifier.js';
+import type { SignatureVerifier } from '../verification/signature-verifier.js';
 import { decidePackage } from '../policy/policy-engine.js';
 import { loadAllowlist } from '../policy/allowlist.js';
 import {
@@ -78,9 +85,11 @@ interface EvaluationContext {
   intelligence?: IntelligenceClient;
   tarballCache: Map<string, Promise<RegistryPackageTarballInspection | undefined>>;
   intelligenceFailures: Map<IntelligenceSource, RiskSignal>;
+  signedIncidentAdvisories?: Promise<AdvisoryInput[]>;
   transitiveEvaluated: Set<string>;
   scriptAllowlist: ScriptAllowlist;
   sourceVerifier: SourceVerifier;
+  signatureVerifier?: SignatureVerifier;
 }
 
 interface EvaluatedPackage {
@@ -95,9 +104,63 @@ async function readLocalAdvisories(cwd: string) {
   return (await pathExists(path)) ? loadLocalAdvisoryFeed(path) : { packages: [] };
 }
 
-async function combinedAdvisories(options: ScanProjectOptions): Promise<AdvisoryInput[]> {
+function configuredSignedIncidentFeeds(
+  options: ScanProjectOptions,
+  loaded: LoadedConfig
+) {
+  return options.signedIncidentFeeds ?? loaded.policy.signedIncidentFeeds;
+}
+
+async function loadConfiguredSignedIncidentAdvisories(
+  options: ScanProjectOptions,
+  context: EvaluationContext
+): Promise<AdvisoryInput[]> {
+  const feeds = configuredSignedIncidentFeeds(options, context.loaded);
+  const required = context.loaded.policy.requiredIntelligenceSources.includes('signed-feed');
+  if (feeds.length === 0) {
+    if (required) {
+      context.intelligenceFailures.set(
+        'signed-feed',
+        requiredIntelligenceUnavailable('signed-feed', 'No signed incident feeds configured')
+      );
+    }
+    return [];
+  }
+
+  const advisories: AdvisoryInput[] = [];
+  for (const feed of feeds) {
+    try {
+      advisories.push(...(await loadSignedIncidentFeed(feed)).packages);
+    } catch (error) {
+      if (required) {
+        context.intelligenceFailures.set(
+          'signed-feed',
+          requiredIntelligenceUnavailable('signed-feed', error)
+        );
+      }
+    }
+  }
+  return advisories;
+}
+
+async function signedIncidentAdvisories(
+  options: ScanProjectOptions,
+  context: EvaluationContext
+): Promise<AdvisoryInput[]> {
+  context.signedIncidentAdvisories ??= loadConfiguredSignedIncidentAdvisories(options, context);
+  return context.signedIncidentAdvisories;
+}
+
+async function combinedAdvisories(
+  options: ScanProjectOptions,
+  context: EvaluationContext
+): Promise<AdvisoryInput[]> {
   const local = await readLocalAdvisories(options.cwd);
-  return [...local.packages, ...(options.advisories ?? [])];
+  return [
+    ...local.packages,
+    ...(await signedIncidentAdvisories(options, context)),
+    ...(options.advisories ?? [])
+  ];
 }
 
 function configProfile(options: ScanProjectOptions) {
@@ -220,6 +283,40 @@ async function configuredSourceVerificationSignals(
   return signals;
 }
 
+function signatureVerificationEnabled(loaded: LoadedConfig): boolean {
+  return (
+    loaded.policy.verifyRegistrySignatures ||
+    loaded.policy.requireCryptographicSignatureVerification
+  );
+}
+
+async function configuredSignatureVerificationSignals(
+  packageName: string,
+  version: string,
+  options: ScanProjectOptions,
+  context: EvaluationContext
+): Promise<RiskSignal[]> {
+  if (!signatureVerificationEnabled(context.loaded)) return [];
+  const required = context.loaded.policy.requireCryptographicSignatureVerification;
+  const result = context.signatureVerifier
+    ? await context.signatureVerifier.verify({
+        cwd: options.cwd,
+        packageName,
+        version
+      })
+    : {
+        status: 'unavailable' as const,
+        message: 'No cryptographic signature verifier configured'
+      };
+
+  return signatureVerificationSignals({
+    packageName,
+    version,
+    required,
+    result
+  });
+}
+
 async function evaluateCandidate(
   candidate: PackageCandidate,
   registry: RegistryClient,
@@ -268,7 +365,7 @@ async function evaluateCandidate(
     const confusion = nameConfusionSignal(candidate, loaded.policy.protectedPackageNames);
     if (confusion) signals.push(confusion);
 
-    const advisoryFeed = { packages: await combinedAdvisories(options) };
+    const advisoryFeed = { packages: await combinedAdvisories(options, context) };
     signals.push(...advisorySignals(matchLocalAdvisories(advisoryFeed, candidate.name, version)));
 
     const intelligence = await intelligenceSignals(
@@ -290,6 +387,19 @@ async function evaluateCandidate(
     if (expectedProvenance) {
       signals.push(...expectedProvenanceSignals(current, expectedProvenance));
     }
+    const expectedTrustedPublishing = loaded.policy.trustedPublishing.find(
+      (rule) => rule.package === candidate.name
+    );
+    signals.push(
+      ...trustedPublishingSignals({
+        manifest: current,
+        packageName: candidate.name,
+        required:
+          loaded.policy.requireTrustedPublishingForHighImpactPackages &&
+          loaded.policy.highImpactPackageNames.includes(candidate.name),
+        expected: expectedTrustedPublishing
+      })
+    );
     signals.push(...(await configuredSourceVerificationSignals(current, context)));
     const signature = signatureSignal(
       current,
@@ -297,6 +407,9 @@ async function evaluateCandidate(
       requiresProvenance
     );
     if (signature) signals.push(signature);
+    signals.push(
+      ...(await configuredSignatureVerificationSignals(candidate.name, version, options, context))
+    );
 
     let currentInspection: RegistryPackageTarballInspection | undefined;
     let previousInspection: RegistryPackageTarballInspection | undefined;
@@ -307,7 +420,8 @@ async function evaluateCandidate(
         cache: context.tarballCache,
         manifest: current,
         requireTarballInspection: loaded.policy.requireTarballInspection,
-        requireIntegrityMatch: loaded.policy.requireIntegrityMatch
+        requireIntegrityMatch: loaded.policy.requireIntegrityMatch,
+        fullTextTarballScanning: loaded.policy.fullTextTarballScanning
       });
       currentInspection = currentTarball.inspection;
       signals.push(...currentTarball.signals);
@@ -316,7 +430,8 @@ async function evaluateCandidate(
         registry,
         cache: context.tarballCache,
         manifest: previousManifest,
-        requireIntegrityMatch: loaded.policy.requireIntegrityMatch
+        requireIntegrityMatch: loaded.policy.requireIntegrityMatch,
+        fullTextTarballScanning: loaded.policy.fullTextTarballScanning
       });
       previousInspection = previousTarball.inspection;
       previousTarballUnavailable = previousTarball.unavailable;
@@ -495,7 +610,7 @@ async function evaluateTransitiveDependencies(
     );
     if (confusion) signals.push(confusion);
 
-    const advisoryFeed = { packages: await combinedAdvisories(options) };
+    const advisoryFeed = { packages: await combinedAdvisories(options, context) };
     signals.push(
       ...advisorySignals(
         matchLocalAdvisories(advisoryFeed, dependency.name, dependency.version)
@@ -522,6 +637,19 @@ async function evaluateTransitiveDependencies(
     if (expectedProvenance) {
       signals.push(...expectedProvenanceSignals(dependency.manifest, expectedProvenance));
     }
+    const expectedTrustedPublishing = loaded.policy.trustedPublishing.find(
+      (rule) => rule.package === dependency.name
+    );
+    signals.push(
+      ...trustedPublishingSignals({
+        manifest: dependency.manifest,
+        packageName: dependency.name,
+        required:
+          loaded.policy.requireTrustedPublishingForHighImpactPackages &&
+          loaded.policy.highImpactPackageNames.includes(dependency.name),
+        expected: expectedTrustedPublishing
+      })
+    );
     signals.push(...(await configuredSourceVerificationSignals(dependency.manifest, context)));
     const signature = signatureSignal(
       dependency.manifest,
@@ -529,6 +657,14 @@ async function evaluateTransitiveDependencies(
       requiresProvenance
     );
     if (signature) signals.push(signature);
+    signals.push(
+      ...(await configuredSignatureVerificationSignals(
+        dependency.name,
+        dependency.version,
+        options,
+        context
+      ))
+    );
 
     let currentInspection: RegistryPackageTarballInspection | undefined;
     let previousInspection: RegistryPackageTarballInspection | undefined;
@@ -542,7 +678,8 @@ async function evaluateTransitiveDependencies(
         cache: context.tarballCache,
         manifest: dependency.manifest,
         requireTarballInspection: loaded.policy.requireTarballInspection,
-        requireIntegrityMatch: loaded.policy.requireIntegrityMatch
+        requireIntegrityMatch: loaded.policy.requireIntegrityMatch,
+        fullTextTarballScanning: loaded.policy.fullTextTarballScanning
       });
       currentInspection = currentTarball.inspection;
       signals.push(...currentTarball.signals);
@@ -551,7 +688,8 @@ async function evaluateTransitiveDependencies(
         registry,
         cache: context.tarballCache,
         manifest: previousManifest,
-        requireIntegrityMatch: loaded.policy.requireIntegrityMatch
+        requireIntegrityMatch: loaded.policy.requireIntegrityMatch,
+        fullTextTarballScanning: loaded.policy.fullTextTarballScanning
       });
       previousInspection = previousTarball.inspection;
       previousTarballUnavailable = previousTarball.unavailable;
@@ -698,6 +836,7 @@ async function registryTarballInspection(input: {
   manifest: PackageManifest;
   requireTarballInspection: boolean;
   requireIntegrityMatch: boolean;
+  fullTextTarballScanning: boolean;
 }): Promise<{ inspection?: RegistryPackageTarballInspection; signals: RiskSignal[] }> {
   const tarballUrl = input.manifest.dist?.tarball;
   if (!tarballUrl) {
@@ -714,11 +853,13 @@ async function registryTarballInspection(input: {
   }
 
   const integrity = input.requireIntegrityMatch ? input.manifest.dist?.integrity : undefined;
-  const key = `${input.manifest.name ?? 'unknown'}@${input.manifest.version ?? 'unknown'}:${integrity ?? tarballUrl}`;
+  const key = `${input.manifest.name ?? 'unknown'}@${input.manifest.version ?? 'unknown'}:${integrity ?? tarballUrl}:${input.fullTextTarballScanning ? 'full-text' : 'sample'}`;
   try {
     let inspection = input.cache.get(key);
     if (!inspection) {
-      inspection = inspectRegistryPackageTarball(input.registry, tarballUrl, integrity);
+      inspection = inspectRegistryPackageTarball(input.registry, tarballUrl, integrity, {
+        fullTextScanning: input.fullTextTarballScanning
+      });
       input.cache.set(key, inspection);
     }
     const result = await inspection;
@@ -763,6 +904,7 @@ async function previousRegistryTarballInspection(input: {
   cache: Map<string, Promise<RegistryPackageTarballInspection | undefined>>;
   manifest?: PackageManifest;
   requireIntegrityMatch: boolean;
+  fullTextTarballScanning: boolean;
 }): Promise<{ inspection?: RegistryPackageTarballInspection; unavailable?: string }> {
   if (!input.manifest) return {};
   if (!input.manifest.dist?.tarball) return {};
@@ -771,7 +913,8 @@ async function previousRegistryTarballInspection(input: {
     cache: input.cache,
     manifest: input.manifest,
     requireTarballInspection: false,
-    requireIntegrityMatch: input.requireIntegrityMatch
+    requireIntegrityMatch: input.requireIntegrityMatch,
+    fullTextTarballScanning: input.fullTextTarballScanning
   });
   if (result.inspection) return { inspection: result.inspection };
   return { unavailable: result.signals[0]?.message ?? 'Previous package tarball could not be inspected' };
@@ -798,7 +941,9 @@ async function projectPolicySignals(
   const lockfileSignals = await analyzeLockfileSecurity(options.cwd, {
     approvedRegistryHosts: approvedRegistryHosts(loaded.policy.approvedRegistryHosts, options.env),
     previousPackageLockPath:
-      options.previousPackageLockPath ?? options.env?.NPM_GATE_BASE_PACKAGE_LOCK
+      options.previousPackageLockPath ?? options.env?.NPM_GATE_BASE_PACKAGE_LOCK,
+    previousPnpmLockPath: options.previousPnpmLockPath ?? options.env?.NPM_GATE_BASE_PNPM_LOCK,
+    previousYarnLockPath: options.previousYarnLockPath ?? options.env?.NPM_GATE_BASE_YARN_LOCK
   });
   if (lockfileSignals.length > 0) {
     findings.push({
@@ -867,6 +1012,9 @@ export async function evaluatePackages(
   const scriptAllowlist = await loadScriptAllowlist(options.cwd);
   const exceptions = await loadExceptions(options.cwd);
   const findings = [];
+  const signatureVerifier =
+    options.signatureVerifier ??
+    (signatureVerificationEnabled(loaded) ? new NpmAuditSignaturesVerifier() : undefined);
   const context: EvaluationContext = {
     loaded,
     intelligence:
@@ -878,7 +1026,8 @@ export async function evaluatePackages(
     intelligenceFailures: new Map(),
     transitiveEvaluated: new Set(),
     scriptAllowlist,
-    sourceVerifier: options.sourceVerifier ?? new GitHubSourceVerifier()
+    sourceVerifier: options.sourceVerifier ?? new GitHubSourceVerifier(),
+    signatureVerifier
   };
 
   const evaluatedCandidateGroups = await mapWithConcurrency(

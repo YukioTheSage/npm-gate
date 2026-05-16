@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import * as tar from 'tar';
+import { verifyPublishedDependencyTree } from './verify-published-dependency-tree.mjs';
 
 const root = process.cwd();
 
@@ -116,6 +117,7 @@ const projectDir = join(workspace, 'project');
 await mkdir(packDir, { recursive: true });
 await mkdir(projectDir, { recursive: true });
 
+await verifyPublishedDependencyTree(root);
 await run('pnpm', ['pack', '--pack-destination', packDir], { cwd: root });
 const packedName = (await readdir(packDir)).find((name) => name.endsWith('.tgz'));
 if (!packedName) throw new Error('pnpm pack did not create a tarball');

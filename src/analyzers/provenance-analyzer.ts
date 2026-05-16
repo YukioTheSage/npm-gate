@@ -2,7 +2,8 @@ import type {
   ExpectedProvenanceRule,
   PackageManifest,
   ProvenanceStatus,
-  RiskSignal
+  RiskSignal,
+  TrustedPublishingRule
 } from '../core/types.js';
 
 export function getProvenanceStatus(manifest: PackageManifest | undefined): ProvenanceStatus {
@@ -78,6 +79,66 @@ export function expectedProvenanceSignals(
         'Provenance proves publish path, not package safety.'
       ],
       canOverride: false
+    }
+  ];
+}
+
+export function trustedPublishingSignals(input: {
+  manifest: PackageManifest;
+  packageName: string;
+  required: boolean;
+  expected?: TrustedPublishingRule;
+}): RiskSignal[] {
+  const provenance = provenanceObject(input.manifest);
+  const hasTrustedSignal = Boolean(
+    provenance.repository || provenance.workflow || provenance.issuer
+  );
+
+  if (input.required && !hasTrustedSignal) {
+    return [
+      {
+        id: 'missing-trusted-publishing',
+        score: 55,
+        severity: 'high',
+        riskCategory: 'provenance_risk',
+        message: `Trusted publishing evidence is missing for ${input.packageName}`,
+        evidence: [
+          { type: 'trusted-publishing', message: 'No trusted publishing metadata found' }
+        ],
+        remediation: ['Use npm trusted publishing or document an approved release exception.'],
+        canOverride: true
+      }
+    ];
+  }
+
+  if (!input.expected) return [];
+  const mismatches: Array<{ field: string; expected: string; actual: unknown }> = [];
+  for (const field of ['repository', 'workflow', 'issuer'] as const) {
+    const expected = input.expected[field];
+    if (!expected) continue;
+    if (provenance[field] !== expected) {
+      mismatches.push({ field, expected, actual: provenance[field] });
+    }
+  }
+
+  if (mismatches.length === 0) return [];
+
+  return [
+    {
+      id: 'trusted-publishing-source-mismatch',
+      score: 65,
+      severity: 'high',
+      riskCategory: 'provenance_risk',
+      message: `Trusted publishing metadata did not match policy for ${input.packageName}`,
+      evidence: [
+        {
+          type: 'trusted-publishing',
+          message: 'Trusted publishing mismatch',
+          value: mismatches
+        }
+      ],
+      remediation: ['Verify the release workflow and trusted publisher configuration.'],
+      canOverride: true
     }
   ];
 }

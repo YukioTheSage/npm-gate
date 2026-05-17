@@ -4,6 +4,17 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json-summary'],
+      all: true,
+      include: ['src/**/*.ts'],
+      exclude: ['src/**/*.d.ts'],
+      thresholds: {
+        lines: 80,
+        statements: 80
+      }
+    },
     restoreMocks: true,
     clearMocks: true
   }

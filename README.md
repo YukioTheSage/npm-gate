@@ -92,7 +92,7 @@ Direct remote tarball URLs are inspected only when they belong to the configured
 
 ## CI Usage
 
-Set `NPM_GATE_MODE=ci` and run `npm-gate scan --production` or `npm-gate ci`. The `ci` command forces the production profile, strict failure semantics, direct registry tarball inspection, lockfile checks, and GitHub workflow checks. For deeper release or incident audits, use `npm-gate ci --release-audit`; it keeps normal CI defaults unchanged while enabling transitive tarball inspection through the dependency closure. `--deep-tarballs` remains available when you only need the lower-level switch.
+Set `NPM_GATE_MODE=ci` and run `npm-gate scan --production` or `npm-gate ci`. The `ci` command forces the production profile, strict failure semantics, direct registry tarball inspection, lockfile checks, and GitHub workflow checks. For release and incident-response jobs, use `npm-gate ci --release-audit`; it enables production policy, strict exit behavior, direct tarball inspection, transitive dependency inspection, and deep tarball inspection for transitive packages. `--deep-tarballs` remains available when you only need the lower-level switch.
 
 ```yaml
 - run: pnpm install --ignore-scripts --frozen-lockfile
@@ -186,7 +186,7 @@ JSON is supported. YAML config is intentionally not enabled in this minimal depe
 
 ## Policy Example
 
-The default policy warns on unknown packages, suspicious static tarball content, missing registry signature data when available, dependency deltas, and lower-confidence frontend runtime risk. When configured with `protectedPackageNames` or high-impact package rules, it also evaluates name-confusion, required provenance, and trusted-publishing expectations. It blocks known malicious advisories, high-risk lifecycle execution, downloader scripts, obfuscated install payloads, strict-mode Git dependencies, CI-only new package names, unapproved lockfile hosts, registry tarball integrity mismatches, dangerous workflow trust boundaries, CI or production credential-harvesting and install-downloader patterns, emergency denylist hits, project source CDN `latest` findings in strict gates, and scores above the configured block threshold.
+The default policy warns on unknown packages, suspicious static tarball content, missing registry signature data when available, dependency deltas, and lower-confidence frontend runtime risk. When configured with `protectedPackageNames` or high-impact package rules, it also evaluates name-confusion, required provenance, and trusted-publishing expectations. It blocks known malicious advisories, high-risk lifecycle execution, downloader scripts, obfuscated install payloads, strict-mode Git dependencies, CI-only new package names, unapproved lockfile hosts, registry tarball integrity mismatches, dangerous workflow trust boundaries, CI or production credential-harvesting and install-downloader patterns, emergency denylist hits, project source CDN `latest` findings in strict gates, strict-release patch dependency additions, new binary or shell artifacts, obfuscated tarball code, invisible Unicode source controls, unsupported remote tarballs, and scores above the configured block threshold.
 
 Provenance and trusted publishing are publish-path signals only. They never suppress lifecycle-script, artifact-diff, dependency-delta, typosquat, frontend runtime, or CI trust-boundary findings.
 

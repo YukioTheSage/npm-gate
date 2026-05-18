@@ -153,6 +153,8 @@ Repository values may be `owner/repo`, `https://github.com/owner/repo`, or `.git
 
 `npm-gate ci` forces production policy and strict exit behavior. It adds project-level findings for package-lock, pnpm-lock, and Yarn classic lockfile tarball hosts outside `approvedRegistryHosts`; lockfile integrity changes against optional baselines; bounded transitive registry dependency inspection; direct registry tarball inspection; and dangerous GitHub Actions patterns such as `pull_request_target` plus untrusted checkout, cache use across privileged workflows, broad token permissions, and actions not pinned to full commit SHAs.
 
+Strict release gates explicitly block high-confidence modern attack indicators, including patch or minor releases that add dependencies, new binary or shell artifacts, obfuscated tarball code, invisible Unicode source controls, unsupported remote tarballs, required intelligence outages, integrity mismatches, and dangerous workflow trust boundaries. Local balanced mode can still report some of these as warnings or manual review findings, but CI and production should treat them as release blockers.
+
 Transitive dependency tarball inspection is opt-in with `--deep-tarballs` or the clearer `npm-gate ci --release-audit` shortcut. This keeps normal CI runtime bounded while still allowing slower release and incident audits to fetch and inspect transitive package artifacts.
 
 The npm-gate release process also runs `pnpm run release:verify-deps` before packing. That check requires `npm-shrinkwrap.json` when runtime dependencies exist so the published CLI has an exact dependency-tree strategy. See [release hardening](release-hardening.md).

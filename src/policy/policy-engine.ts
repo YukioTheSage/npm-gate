@@ -43,6 +43,19 @@ function categoryForSignal(signal: RiskSignal): RiskCategory | undefined {
   return undefined;
 }
 
+function isStrictReleaseGate(
+  policy: PolicyConfig,
+  mode: RuntimeMode,
+  policyMode: PolicyMode
+): boolean {
+  return (
+    mode === 'ci' ||
+    policy.profile === 'production' ||
+    policyMode === 'strict' ||
+    policyMode === 'emergency'
+  );
+}
+
 function mustBlockSignal(
   signal: RiskSignal,
   policy: PolicyConfig,
@@ -76,6 +89,20 @@ function mustBlockSignal(
     'lifecycle-bun-bootstrap'
   ]);
   if (policyMode === 'emergency' && signal.severity !== 'info') return true;
+  const strictReleaseBlockSignals = new Set([
+    'new-dependency-in-patch-release',
+    'new-binary-file',
+    'new-suspicious-file',
+    'obfuscated-code-pattern',
+    'invisible-unicode-source',
+    'unsupported-remote-tarball',
+    'remote-tarball-uninspectable',
+    'remote-tarball-manifest-missing',
+    'remote-tarball-manifest-invalid'
+  ]);
+  if (isStrictReleaseGate(policy, mode, policyMode) && strictReleaseBlockSignals.has(signal.id)) {
+    return true;
+  }
   if (
     policyMode === 'strict' &&
     [

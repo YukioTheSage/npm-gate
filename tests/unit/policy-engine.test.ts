@@ -181,6 +181,64 @@ describe('policy engine', () => {
     }
   });
 
+  test('strict release gates block modern supply-chain attack indicators explicitly', () => {
+    for (const signalId of [
+      'new-dependency-in-patch-release',
+      'new-binary-file',
+      'new-suspicious-file',
+      'obfuscated-code-pattern',
+      'invisible-unicode-source',
+      'unsupported-remote-tarball',
+      'remote-tarball-uninspectable',
+      'remote-tarball-manifest-missing',
+      'remote-tarball-manifest-invalid'
+    ]) {
+      const balanced = decidePackage({
+        candidate: { name: 'fixture', version: '1.0.1' },
+        policy: { ...defaultPolicy, policyMode: 'balanced' },
+        mode: 'warn',
+        policyMode: 'balanced',
+        signals: [
+          {
+            id: signalId,
+            score: signalId === 'new-binary-file' ? 60 : 35,
+            severity: signalId === 'new-binary-file' ? 'high' : 'medium',
+            message: signalId,
+            manualReview: signalId.startsWith('new-'),
+            canOverride:
+              !signalId.startsWith('remote-tarball') &&
+              signalId !== 'unsupported-remote-tarball'
+          }
+        ]
+      });
+      expect(['warn', 'manual_review', 'block']).toContain(balanced.decision);
+
+      const strict = decidePackage({
+        candidate: { name: 'fixture', version: '1.0.1' },
+        policy: { ...defaultPolicy, policyMode: 'strict' },
+        mode: 'warn',
+        policyMode: 'strict',
+        signals: [
+          {
+            id: signalId,
+            score: signalId === 'new-binary-file' ? 60 : 35,
+            severity: signalId === 'new-binary-file' ? 'high' : 'medium',
+            message: signalId,
+            manualReview: signalId.startsWith('new-'),
+            canOverride:
+              !signalId.startsWith('remote-tarball') &&
+              signalId !== 'unsupported-remote-tarball'
+          }
+        ]
+      });
+
+      expect(strict.decision, signalId).toBe('block');
+      expect(strict.killChain, signalId).toContain(
+        `Blocked: fixture@1.0.1 matched ${signalId}`
+      );
+    }
+  });
+
   test('strict and emergency policy block git dependencies outside CI mode', () => {
     for (const policyMode of ['strict', 'emergency'] as const) {
       for (const signalId of ['git-dependency', 'git-dependency-switch']) {
